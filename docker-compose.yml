@@ -1,0 +1,27 @@
+services:
+  api:
+    build: .
+    container_name: ticket_api
+    ports:
+      - "8000:8000"
+    environment:
+      APP_NAME: FastAPI Ticket Search Service
+      ENVIRONMENT: local
+      DATABASE_URL: postgresql+psycopg://ticket_user:ticket_password@postgres:5432/ticket_db
+    depends_on:
+      - postgres
+
+  postgres:
+    image: postgres:16
+    container_name: ticket_postgres
+    environment:
+      POSTGRES_USER: ticket_user
+      POSTGRES_PASSWORD: ticket_password
+      POSTGRES_DB: ticket_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - ticket_postgres_data:/var/lib/postgresql/data
+
+volumes:
+  ticket_postgres_data:
