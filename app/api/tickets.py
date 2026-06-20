@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.schemas.ticket import TicketCreateRequest, TicketResponse
+from app.schemas.ticket import TicketCreateRequest, TicketResponse, TicketUpdateRequest
 from app.services.ticket_service import TicketService
 
 router = APIRouter(prefix="/tickets", tags=["Tickets"])
@@ -25,7 +25,12 @@ def list_tickets(
     limit: int = 20,
     offset: int = 0,
     db: Session = Depends(get_db),
-):
+):  
+    if limit > 100:
+        raise HTTPException(status_code=400, detail="Limit cannot exceed 100")
+    if limit < 1:
+        raise HTTPException(status_code=400, detail="Limit must be at least 1")
+
     service = TicketService(db)
     return service.list_tickets(
         status=status,
@@ -45,3 +50,28 @@ def get_ticket(ticket_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Ticket not found")
 
     return ticket
+
+
+@router.patch("/{ticket_id}", response_model=TicketResponse)
+def update_ticket(
+    ticket_id: int,
+    payload: TicketUpdateRequest,
+    db: Session = Depends(get_db),
+):
+    service = TicketService(db)
+    ticket = service.update_ticket(ticket_id, payload)
+    
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    
+    return ticket
+
+
+@router.delete("/{ticket_id}", status_code=204)
+def delete_ticket(ticket_id: int, db: Session = Depends(get_db)):
+    service = TicketService(db)
+    deleted = service.delete_ticket(ticket_id)
+    
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    
