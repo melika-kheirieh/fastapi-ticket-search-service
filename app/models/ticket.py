@@ -11,20 +11,34 @@ class Ticket(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
 
-    user_id: Mapped[int] = mapped_column(nullable=False)
-    title: Mapped[str] = mapped_column(String(200), nullable=False)
-    description: Mapped[str] = mapped_column(Text, nullable=False)
+    user_id: Mapped[int] = mapped_column(
+        nullable=False,
+        index=True,
+    )
+    title: Mapped[str] = mapped_column(
+        String(200),
+        nullable=False,
+    )
+    description: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+    )
     status: Mapped[str] = mapped_column(
         String(32),
         nullable=False,
         default="open",
+        index=True,
     )
     priority: Mapped[str] = mapped_column(
         String(32),
         nullable=False,
         default="medium",
     )
-    category: Mapped[str] = mapped_column(String(64), nullable=False)
+    category: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        index=True,
+    )
     tags: Mapped[list[str]] = mapped_column(
         JSON,
         nullable=False,
@@ -35,6 +49,7 @@ class Ticket(Base):
         DateTime(timezone=True),
         server_default=func.now(),
         nullable=False,
+        index=True,
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
