@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class TicketCreateRequest(BaseModel):
@@ -35,3 +35,9 @@ class TicketUpdateRequest(BaseModel):
     priority: str | None = Field(None, min_length=1, max_length=32)
     category: str | None = Field(None, min_length=1, max_length=64)
     tags: list[str] | None = None
+
+    @model_validator(mode="after")
+    def require_at_least_one_value(self) -> "TicketUpdateRequest":
+        if all(value is None for value in self.model_dump().values()):
+            raise ValueError("At least one field must be provided")
+        return self
