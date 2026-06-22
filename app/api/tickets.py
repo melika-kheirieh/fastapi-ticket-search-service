@@ -51,6 +51,10 @@ def list_tickets(
         min_length=1,
         max_length=64,
     ),
+    user_id: int | None = Query(
+        default=None,
+        gt=0,
+    ),
     limit: int = Query(
         default=20,
         ge=1,
@@ -68,6 +72,7 @@ def list_tickets(
         status=status,
         priority=priority,
         category=category,
+        user_id=user_id,
         limit=limit,
         offset=offset,
     )
@@ -81,7 +86,7 @@ def get_ticket(
     service = TicketService(db)
     ticket = service.get_ticket_by_id(ticket_id)
 
-    if not ticket:
+    if ticket is None:
         raise HTTPException(
             status_code=http_status.HTTP_404_NOT_FOUND,
             detail="Ticket not found",
@@ -99,7 +104,7 @@ def update_ticket(
     service = TicketService(db)
     ticket = service.update_ticket(ticket_id, payload)
 
-    if not ticket:
+    if ticket is None:
         raise HTTPException(
             status_code=http_status.HTTP_404_NOT_FOUND,
             detail="Ticket not found",
