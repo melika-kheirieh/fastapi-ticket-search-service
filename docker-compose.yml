@@ -8,6 +8,8 @@ services:
       APP_NAME: FastAPI Ticket Search Service
       ENVIRONMENT: local
       DATABASE_URL: postgresql+psycopg://ticket_user:ticket_password@postgres:5432/ticket_db
+      ELASTICSEARCH_URL: http://elasticsearch:9200
+      TICKET_SEARCH_INDEX: tickets_v1
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -39,5 +41,18 @@ services:
       timeout: 5s
       retries: 10
 
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.14.3
+    container_name: ticket_elasticsearch
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    volumes:
+      - ticket_elasticsearch_data:/usr/share/elasticsearch/data
+
 volumes:
   ticket_postgres_data:
+  ticket_elasticsearch_data:
