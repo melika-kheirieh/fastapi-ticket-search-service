@@ -23,3 +23,24 @@ def create_ticket_index_if_missing(
         mappings=TICKET_INDEX_MAPPING["mappings"],
     )
     return True
+
+
+def recreate_ticket_index(
+    client: "Elasticsearch",
+    index_name: str | None = None,
+) -> None:
+    from app.search.mappings import TICKET_INDEX_MAPPING
+
+    if index_name is None:
+        from app.core.config import settings
+
+        index_name = settings.ticket_search_index
+
+    if client.indices.exists(index=index_name):
+        client.indices.delete(index=index_name)
+
+    client.indices.create(
+        index=index_name,
+        mappings=TICKET_INDEX_MAPPING["mappings"],
+        settings=TICKET_INDEX_MAPPING["settings"],
+    )
