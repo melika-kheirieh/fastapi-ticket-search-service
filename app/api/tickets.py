@@ -15,6 +15,8 @@ from app.schemas.ticket import (
     TicketResponse,
     TicketUpdateRequest,
 )
+from app.search.client import create_elasticsearch_client
+from app.search.queries import search_tickets as search_ticket_documents
 from app.services.ticket_service import TicketService
 
 
@@ -73,6 +75,46 @@ def list_tickets(
         priority=priority,
         category=category,
         user_id=user_id,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/search", response_model=list[TicketResponse])
+def search_tickets(
+    q: str = Query(..., min_length=1, max_length=200),
+    status: str | None = Query(
+        default=None,
+        min_length=1,
+        max_length=32,
+    ),
+    priority: str | None = Query(
+        default=None,
+        min_length=1,
+        max_length=32,
+    ),
+    category: str | None = Query(
+        default=None,
+        min_length=1,
+        max_length=64,
+    ),
+    tag: str | None = Query(
+        default=None,
+        min_length=1,
+        max_length=64,
+    ),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+):
+    client = create_elasticsearch_client()
+
+    return search_ticket_documents(
+        client=client,
+        query=q,
+        status=status,
+        priority=priority,
+        category=category,
+        tag=tag,
         limit=limit,
         offset=offset,
     )
