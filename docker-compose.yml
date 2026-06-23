@@ -3,13 +3,24 @@ services:
     build: .
     container_name: ticket_api
     ports:
-      - "8000:8000"
+      - "8001:8000"
     environment:
       APP_NAME: FastAPI Ticket Search Service
       ENVIRONMENT: local
       DATABASE_URL: postgresql+psycopg://ticket_user:ticket_password@postgres:5432/ticket_db
     depends_on:
-      - postgres
+      migrate:
+        condition: service_completed_successfully
+
+  migrate:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+psycopg://ticket_user:ticket_password@postgres:5432/ticket_db
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
 
   postgres:
     image: postgres:16
@@ -22,6 +33,11 @@ services:
       - "5432:5432"
     volumes:
       - ticket_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ticket_user -d ticket_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
 volumes:
   ticket_postgres_data:
