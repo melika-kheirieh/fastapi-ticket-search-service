@@ -7,6 +7,8 @@ class Settings(BaseSettings):
     database_url: str = (
         "postgresql+psycopg://ticket_user:ticket_password@localhost:5432/ticket_db"
     )
+    elasticsearch_url: str = "http://localhost:9200"
+    ticket_search_index: str = "tickets_v1"
 
     model_config = SettingsConfigDict(
         env_file=".env",
