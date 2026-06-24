@@ -1,171 +1,68 @@
 # FastAPI Ticket Search Service
 
-A backend service for managing support tickets with FastAPI, PostgreSQL, SQLAlchemy, Alembic, Docker Compose, and Elasticsearch.
+A production-aware backend learning project for managing support tickets and searching them with PostgreSQL and Elasticsearch.
 
-The core design choice is:
-
-```text
-PostgreSQL = source of truth
-Elasticsearch = rebuildable search projection
-```
-
-This project focuses on practical backend fundamentals: clear API contracts, database-backed persistence, explicit migrations, layered architecture, testable search queries, and a small smoke flow for demo verification.
+PostgreSQL is the source of truth. Elasticsearch is used as a query-optimized search projection.
 
 ## Features
 
-- Ticket CRUD API
-- PostgreSQL persistence with SQLAlchemy
-- Alembic migrations and database indexes
-- Repository and service layers
-- Database filtering and pagination
-- Elasticsearch `tickets_v1` index with explicit mapping
-- Ticket write sync to Elasticsearch after create, update, and delete
-- Reindex command to rebuild Elasticsearch from PostgreSQL
-- Elasticsearch-backed search endpoint with full-text search and filters
-- API, service, repository, and search-layer tests
-- Docker Compose local stack
+- FastAPI REST API
+- PostgreSQL persistence
+- SQLAlchemy repository/service layers
+- Alembic migrations
+- Ticket CRUD endpoints
+- Filtering and pagination
+- Elasticsearch explicit mapping
+- Full-text ticket search
+- Reindex flow from PostgreSQL to Elasticsearch
+- Unit/API tests with pytest
 - GitHub Actions CI
-- Search smoke verification script
-
-Not implemented:
-
-- Authentication
+- Docker Compose local stack
+- End-to-end search smoke script
 
 ## Tech Stack
 
-- Python 3.12
+- Python
 - FastAPI
-- PostgreSQL 16
+- Pydantic
 - SQLAlchemy
 - Alembic
-- Pydantic
-- Elasticsearch 8
+- PostgreSQL
+- Elasticsearch
 - Docker Compose
 - pytest
 - GitHub Actions
 
 ## Architecture
 
-Write path:
+```mermaid
+flowchart LR
+    Client["Client"] --> API["FastAPI API"]
+    API --> DB["PostgreSQL"]
+    API --> ES["Elasticsearch"]
+    DB --> Reindex["Reindex Script"]
+    Reindex --> ES
+````
+
+Application boundaries:
 
 ```text
-API route
-  -> service layer
-  -> repository layer
-  -> PostgreSQL
+API Router -> Service -> Repository -> PostgreSQL
+Search API -> Query Builder -> Elasticsearch
+Reindex Script -> PostgreSQL -> Elasticsearch
 ```
 
-Search projection:
+## API Overview
 
-```text
-Ticket write
-  -> PostgreSQL commit
-  -> search document
-  -> Elasticsearch tickets_v1 document
-```
-
-Consistency rule:
-
-- Ticket writes are committed to PostgreSQL first.
-- Elasticsearch sync runs after the PostgreSQL commit.
-- If Elasticsearch sync fails, the API write still succeeds and the failure is logged.
-- The search projection can be rebuilt with the reindex command.
-
-## API
-
-Health:
-
-```http
-GET /health
-```
-
-Tickets:
-
-```http
-POST /tickets
-GET /tickets
-GET /tickets/{ticket_id}
-PATCH /tickets/{ticket_id}
-DELETE /tickets/{ticket_id}
-```
-
-Search:
-
-```http
-GET /tickets/search
-```
-
-Database-backed ticket listing supports:
-
-| Parameter | Description |
-| --- | --- |
-| `user_id` | Filter by ticket owner |
-| `status` | Filter by status |
-| `priority` | Filter by priority |
-| `category` | Filter by category |
-| `limit` | Result limit, from `1` to `100` |
-| `offset` | Number of rows to skip |
-
-Elasticsearch-backed search supports:
-
-| Parameter | Description |
-| --- | --- |
-| `q` | Full-text search across title and description |
-| `user_id` | Filter by ticket owner |
-| `status` | Filter by status |
-| `priority` | Filter by priority |
-| `category` | Filter by category |
-| `tag` | Filter by one tag |
-| `created_from` | Filter by minimum creation timestamp |
-| `created_to` | Filter by maximum creation timestamp |
-| `limit` | Result limit, from `1` to `100` |
-| `offset` | Number of rows to skip |
-
-Example:
-
-```bash
-curl "http://localhost:8001/tickets/search?q=payment&status=open&tag=checkout&limit=10&offset=0"
-```
-
-## Elasticsearch
-
-The first search index is:
-
-```text
-tickets_v1
-```
-
-The mapping lives in:
-
-```text
-app/search/mappings.py
-```
-
-Important field choices:
-
-| Field | Type | Purpose |
-| --- | --- | --- |
-| `title` | `text` with `keyword` subfield | Full-text search plus exact option |
-| `description` | `text` | Full-text search |
-| `status` | `keyword` | Exact filtering |
-| `priority` | `keyword` | Exact filtering |
-| `category` | `keyword` | Exact filtering |
-| `tags` | `keyword` | Tag filtering |
-| `user_id` | `long` | Numeric owner filter |
-| `created_at` | `date` | Sorting and date ranges |
-| `updated_at` | `date` | Freshness tracking |
-
-Create the index:
-
-```bash
-python -m app.search.setup
-```
-
-Rebuild the search projection:
-
-```bash
-python -m app.search.reindex
-```
+| Method   | Endpoint               | Purpose                           |
+| -------- | ---------------------- | --------------------------------- |
+| `GET`    | `/health`              | Health check                      |
+| `POST`   | `/tickets`             | Create a ticket                   |
+| `GET`    | `/tickets`             | List tickets with filters         |
+| `GET`    | `/tickets/{ticket_id}` | Get one ticket                    |
+| `PATCH`  | `/tickets/{ticket_id}` | Update a ticket                   |
+| `DELETE` | `/tickets/{ticket_id}` | Delete a ticket                   |
+| `GET`    | `/tickets/search`      | Search tickets with Elasticsearch |
 
 ## Local Development
 
@@ -183,142 +80,138 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-Run the API locally:
-
-```bash
-uvicorn app.main:app --reload
-```
-
-Health check:
-
-```bash
-curl http://localhost:8000/health
-```
-
-## Docker Compose
-
-Build and start the local stack:
-
-```bash
-docker compose up --build -d
-```
-
-The stack includes:
-
-- PostgreSQL
-- Alembic migration container
-- Elasticsearch
-- API
-
-The API is exposed on:
-
-```text
-http://localhost:8001
-```
-
-Elasticsearch is exposed on:
-
-```text
-http://localhost:9200
-```
-
-Run setup and reindex inside the API container:
-
-```bash
-docker compose exec api python -m app.search.setup
-docker compose exec api python -m app.search.reindex
-```
-
-Run the search smoke flow:
-
-```bash
-scripts/verify_search_flow.sh
-```
-
-The smoke script checks API health, ensures the Elasticsearch index exists, creates a ticket through the API, reindexes tickets, and verifies that the created ticket is searchable through `GET /tickets/search`.
-
-Stop containers:
-
-```bash
-docker compose down
-```
-
-Remove local PostgreSQL and Elasticsearch data:
-
-```bash
-docker compose down -v
-```
-
-## Migrations
-
-Run migrations manually:
-
-```bash
-alembic upgrade head
-```
-
-Check current revision:
-
-```bash
-alembic current
-```
-
-Inside Docker:
-
-```bash
-docker compose exec api alembic current
-```
-
-Current migration history includes:
-
-- initial `tickets` table
-- indexes for common access patterns:
-  - `user_id`
-  - `status`
-  - `category`
-  - `created_at`
-
-## Tests
-
 Run tests:
 
 ```bash
 pytest -q
 ```
 
-Test coverage:
+## Docker Compose
 
-| Area | Coverage |
-| --- | --- |
-| API routes | CRUD routes, validation errors, not-found behavior, route-to-service contracts |
-| Service layer | Ticket write behavior and Elasticsearch sync failure tolerance |
-| Repository layer | SQLAlchemy filters, ordering, and pagination |
-| Search documents | Conversion from database tickets to Elasticsearch documents |
-| Search mapping | Explicit field mapping for full-text and filter fields |
-| Search queries | Bool query construction, filters, date ranges, sorting, and pagination |
-| Searcher | Elasticsearch response parsing |
-| Reindex | Rebuilding the search projection from database tickets |
-| Smoke script | Docker-backed API, PostgreSQL, and Elasticsearch search flow |
+Build and start the stack:
+
+```bash
+docker compose up --build
+```
+
+The API is available at:
+
+```text
+http://localhost:8001
+```
+
+OpenAPI docs:
+
+```text
+http://localhost:8001/docs
+```
+
+Stop the stack:
+
+```bash
+docker compose down
+```
+
+Remove local volumes when you need a clean reset:
+
+```bash
+docker compose down -v
+```
+
+## Database Migrations
+
+Run migrations inside the API container:
+
+```bash
+docker compose exec api alembic upgrade head
+```
+
+Create a new migration after model changes:
+
+```bash
+docker compose exec api alembic revision --autogenerate -m "describe change"
+```
+
+## Elasticsearch Setup
+
+Create or update the Elasticsearch index:
+
+```bash
+docker compose exec api python -m app.search.setup
+```
+
+Reindex tickets from PostgreSQL into Elasticsearch:
+
+```bash
+docker compose exec api python -m app.search.reindex
+```
+
+## Search Smoke Test
+
+Run the end-to-end search verification script:
+
+```bash
+chmod +x scripts/verify_search_flow.sh
+scripts/verify_search_flow.sh
+```
+
+The script verifies that:
+
+* the API is reachable;
+* the Elasticsearch index exists;
+* a ticket can be created through the API;
+* tickets can be reindexed from PostgreSQL;
+* the created ticket can be found through Elasticsearch search.
+
+## Testing
+
+Run the test suite:
+
+```bash
+pytest -q
+```
+
+Current test coverage focuses on:
+
+* ticket CRUD API behavior;
+* service/repository boundaries;
+* request validation;
+* filtering and pagination;
+* Elasticsearch query building;
+* search API behavior with fake search clients.
 
 ## CI
 
-GitHub Actions workflow:
+GitHub Actions runs the test suite on pushes and pull requests.
 
-```text
-.github/workflows/ci.yml
-```
+The CI workflow is intentionally lightweight: it runs fast tests without requiring a live PostgreSQL or Elasticsearch service.
 
-It runs on pushes to `main` and on pull requests:
+The Docker-based smoke script remains a manual integration check for the full local stack.
 
-- sets up Python 3.12
-- installs dependencies from `requirements.txt`
-- runs `pytest -q`
+## Design Decisions
 
-## What This Demonstrates
+### PostgreSQL is the source of truth
 
-- Designing PostgreSQL as the durable source of truth
-- Using Elasticsearch as a rebuildable search projection
-- Keeping API, service, repository, and search responsibilities separate
-- Writing tests at different levels instead of relying only on end-to-end checks
-- Handling eventual consistency between database writes and search indexing
-- Packaging a backend project with Docker Compose, CI, migrations, and smoke verification
+Ticket data is stored and updated in PostgreSQL. Elasticsearch is not treated as the primary database.
+
+### Elasticsearch is a search projection
+
+Search documents are derived from ticket records. If Elasticsearch becomes stale, the index can be rebuilt from PostgreSQL.
+
+### Query building is isolated
+
+Elasticsearch query construction lives in a separate module so it can be tested without running Elasticsearch.
+
+### Integration checks are explicit
+
+Fast tests run in CI. The full PostgreSQL + Elasticsearch flow is verified separately with a smoke script.
+
+## Out of Scope
+
+This project does not currently include:
+
+* authentication or authorization;
+* async indexing with Redis/Celery;
+* production Elasticsearch cluster configuration;
+* observability stack;
+* deployment to cloud infrastructure.
