@@ -1,132 +1,210 @@
+import pytest
 from fastapi.testclient import TestClient
 
-import app.api.tickets as tickets_api
+from app.api.tickets import get_db
 from app.main import app
 
 
-def test_search_tickets_route_returns_search_results(monkeypatch):
-    fake_client = object()
-    calls = []
+@pytest.fixture(autouse=True)
+def override_db_dependency():
+    app.dependency_overrides[get_db] = lambda: object()
+    yield
+    app.dependency_overrides.clear()
 
-    def fake_create_elasticsearch_client():
-        return fake_client
 
-    def fake_search_ticket_documents(
-        client,
-        query: str | None,
-        status: str | None,
-        priority: str | None,
-        category: str | None,
-        tag: str | None,
-        user_id: int | None,
-        created_from,
-        created_to,
-        limit: int,
-        offset: int,
-    ):
-        calls.append(
-            {
-                "client": client,
-                "query": query,
-                "status": status,
-                "priority": priority,
-                "category": category,
-                "tag": tag,
-                "user_id": user_id,
-                "created_from": created_from,
-                "created_to": created_to,
-                "limit": limit,
-                "offset": offset,
-            }
-        )
+def ticket_response(**overrides):
+    data = {
+        "id": 1,
+        "user_id": 7,
+        "title": "Payment failed",
+        "description": "Payment was not captured",
+        "status": "open",
+        "priority": "high",
+        "category": "billing",
+        "tags": ["payment", "checkout"],
+        "created_at": "2026-06-23T10:30:00+00:00",
+        "updated_at": "2026-06-23T10:35:00+00:00",
+    }
+    data.update(overrides)
+    return data
 
-        return [
-            {
-                "id": 3,
-                "user_id": 21,
-                "title": "Payment failed",
-                "description": "User payment failed during checkout",
-                "status": "open",
-                "priority": "high",
-                "category": "payment",
-                "tags": ["payment", "checkout"],
-                "created_at": "2026-06-23T09:11:01.772070Z",
-                "updated_at": "2026-06-23T09:11:01.772070Z",
-            }
-        ]
 
-    monkeypatch.setattr(
-        tickets_api,
-        "create_elasticsearch_client",
-        fake_create_elasticsearch_client,
-    )
-    monkeypatch.setattr(
-        tickets_api,
-        "search_ticket_documents",
-        fake_search_ticket_documents,
-    )
+def test_create_ticket_returns_created_ticket(monkeypatch):
+    calls = {}
+
+    class FakeTicketService:
+        def __init__(self, db):
+            calls["db"] = db
+
+        def create_ticket(self, payload):
+            calls["payload"] = payload
+            return ticket_response(
+                title=payload.title,
+                description=payload.description,
+                status=payload.status,
+                priority=payload.priority,
+                category=payload.category,
+                tags=payload.tags,
+            )
+
+    monkeypatch.setattr("app.api.tickets.TicketService", FakeTicketService)
 
     client = TestClient(app)
-
-    response = client.get(
-        "/tickets/search",
-        params={
-            "q": "payment",
+    response = client.post(
+        "/tickets",
+        json={
+            "user_id": 7,
+            "title": "Payment failed",
+            "description": "Payment was not captured",
             "status": "open",
             "priority": "high",
-            "category": "payment",
-            "tag": "checkout",
-            "user_id": 21,
-            "created_from": "2026-06-01T00:00:00Z",
-            "created_to": "2026-06-24T00:00:00Z",
-            "limit": 5,
-            "offset": 0,
+            "category": "billing",
+            "tags": ["payment", "checkout"],
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["title"] == "Payment failed"
+    assert calls["payload"].user_id == 7
+    assert calls["payload"].tags == ["payment", "checkout"]
+
+
+def test_create_ticket_validates_required_fields():
+    client = TestClient(app)
+
+    response = client.post(
+        "/tickets",
+        json={
+            "user_id": 7,
+            "description": "Payment was not captured",
+            "category": "billing",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_list_tickets_forwards_filters_and_pagination(monkeypatch):
+    calls = {}
+
+    class FakeTicketService:
+        def __init__(self, db):
+            calls["db"] = db
+
+        def list_tickets(self, **kwargs):
+            calls["kwargs"] = kwargs
+            return [ticket_response()]
+
+    monkeypatch.setattr("app.api.tickets.TicketService", FakeTicketService)
+
+    client = TestClient(app)
+    response = client.get(
+        "/tickets",
+        params={
+            "status": "open",
+            "priority": "high",
+            "category": "billing",
+            "user_id": 7,
+            "limit": 10,
+            "offset": 20,
         },
     )
 
     assert response.status_code == 200
-    assert response.json()[0]["id"] == 3
-    assert response.json()[0]["title"] == "Payment failed"
-
-    assert calls[0]["client"] is fake_client
-    assert calls[0]["query"] == "payment"
-    assert calls[0]["status"] == "open"
-    assert calls[0]["priority"] == "high"
-    assert calls[0]["category"] == "payment"
-    assert calls[0]["tag"] == "checkout"
-    assert calls[0]["user_id"] == 21
-    assert calls[0]["created_from"].isoformat() == "2026-06-01T00:00:00+00:00"
-    assert calls[0]["created_to"].isoformat() == "2026-06-24T00:00:00+00:00"
-    assert calls[0]["limit"] == 5
-    assert calls[0]["offset"] == 0
+    assert response.json()[0]["id"] == 1
+    assert calls["kwargs"] == {
+        "status": "open",
+        "priority": "high",
+        "category": "billing",
+        "user_id": 7,
+        "limit": 10,
+        "offset": 20,
+    }
 
 
-def test_search_tickets_allows_filter_without_text_query(monkeypatch):
-    captured = {}
-
-    def fake_create_elasticsearch_client():
-        return object()
-
-    def fake_search_ticket_documents(client, **kwargs):
-        captured.update(kwargs)
-        return []
-
-    monkeypatch.setattr(
-        "app.api.tickets.create_elasticsearch_client",
-        fake_create_elasticsearch_client,
-    )
-    monkeypatch.setattr(
-        "app.api.tickets.search_ticket_documents",
-        fake_search_ticket_documents,
-    )
-
+def test_list_tickets_validates_pagination():
     client = TestClient(app)
 
-    response = client.get("/tickets/search", params={"status": "open"})
+    response = client.get("/tickets", params={"limit": 0})
 
-    assert response.status_code == 200
-    assert captured["query"] is None
-    assert captured["status"] == "open"
-    assert captured["user_id"] is None
-    assert captured["created_from"] is None
-    assert captured["created_to"] is None
+    assert response.status_code == 422
+
+
+def test_get_ticket_returns_not_found_when_service_returns_none(monkeypatch):
+    class FakeTicketService:
+        def __init__(self, db):
+            pass
+
+        def get_ticket_by_id(self, ticket_id):
+            return None
+
+    monkeypatch.setattr("app.api.tickets.TicketService", FakeTicketService)
+
+    client = TestClient(app)
+    response = client.get("/tickets/999")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Ticket not found"}
+
+
+def test_update_ticket_validates_non_empty_payload():
+    client = TestClient(app)
+
+    response = client.patch("/tickets/1", json={})
+
+    assert response.status_code == 422
+
+
+def test_update_ticket_returns_not_found_when_service_returns_none(monkeypatch):
+    class FakeTicketService:
+        def __init__(self, db):
+            pass
+
+        def update_ticket(self, ticket_id, payload):
+            return None
+
+    monkeypatch.setattr("app.api.tickets.TicketService", FakeTicketService)
+
+    client = TestClient(app)
+    response = client.patch("/tickets/999", json={"status": "closed"})
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Ticket not found"}
+
+
+def test_delete_ticket_returns_no_content(monkeypatch):
+    calls = {}
+
+    class FakeTicketService:
+        def __init__(self, db):
+            pass
+
+        def delete_ticket(self, ticket_id):
+            calls["ticket_id"] = ticket_id
+            return True
+
+    monkeypatch.setattr("app.api.tickets.TicketService", FakeTicketService)
+
+    client = TestClient(app)
+    response = client.delete("/tickets/1")
+
+    assert response.status_code == 204
+    assert response.content == b""
+    assert calls["ticket_id"] == 1
+
+
+def test_delete_ticket_returns_not_found_when_service_returns_false(monkeypatch):
+    class FakeTicketService:
+        def __init__(self, db):
+            pass
+
+        def delete_ticket(self, ticket_id):
+            return False
+
+    monkeypatch.setattr("app.api.tickets.TicketService", FakeTicketService)
+
+    client = TestClient(app)
+    response = client.delete("/tickets/999")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Ticket not found"}
