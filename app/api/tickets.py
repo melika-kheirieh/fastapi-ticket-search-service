@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from fastapi import (
     APIRouter,
     Depends,
@@ -38,34 +40,12 @@ def create_ticket(
 
 @router.get("", response_model=list[TicketResponse])
 def list_tickets(
-    status: str | None = Query(
-        default=None,
-        min_length=1,
-        max_length=32,
-    ),
-    priority: str | None = Query(
-        default=None,
-        min_length=1,
-        max_length=32,
-    ),
-    category: str | None = Query(
-        default=None,
-        min_length=1,
-        max_length=64,
-    ),
-    user_id: int | None = Query(
-        default=None,
-        gt=0,
-    ),
-    limit: int = Query(
-        default=20,
-        ge=1,
-        le=100,
-    ),
-    offset: int = Query(
-        default=0,
-        ge=0,
-    ),
+    status: str | None = Query(default=None, min_length=1, max_length=32),
+    priority: str | None = Query(default=None, min_length=1, max_length=32),
+    category: str | None = Query(default=None, min_length=1, max_length=64),
+    user_id: int | None = Query(default=None, gt=0),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
     service = TicketService(db)
@@ -82,27 +62,14 @@ def list_tickets(
 
 @router.get("/search", response_model=list[TicketResponse])
 def search_tickets(
-    q: str = Query(..., min_length=1, max_length=200),
-    status: str | None = Query(
-        default=None,
-        min_length=1,
-        max_length=32,
-    ),
-    priority: str | None = Query(
-        default=None,
-        min_length=1,
-        max_length=32,
-    ),
-    category: str | None = Query(
-        default=None,
-        min_length=1,
-        max_length=64,
-    ),
-    tag: str | None = Query(
-        default=None,
-        min_length=1,
-        max_length=64,
-    ),
+    q: str | None = Query(default=None, min_length=1, max_length=200),
+    status: str | None = Query(default=None, min_length=1, max_length=32),
+    priority: str | None = Query(default=None, min_length=1, max_length=32),
+    category: str | None = Query(default=None, min_length=1, max_length=64),
+    tag: str | None = Query(default=None, min_length=1, max_length=64),
+    user_id: int | None = Query(default=None, gt=0),
+    created_from: datetime | None = Query(default=None),
+    created_to: datetime | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ):
@@ -115,6 +82,9 @@ def search_tickets(
         priority=priority,
         category=category,
         tag=tag,
+        user_id=user_id,
+        created_from=created_from,
+        created_to=created_to,
         limit=limit,
         offset=offset,
     )
