@@ -13,13 +13,34 @@ require_command() {
 
 wait_for_api() {
   for _ in $(seq 1 30); do
-    if curl -fsS "$BASE_URL/health" >/dev/null; then
+    if curl -fsS "$BASE_URL/health" >/dev/null 2>&1; then
       return 0
     fi
+
     sleep 1
   done
 
   echo "API did not become ready at $BASE_URL" >&2
+  exit 1
+}
+
+wait_for_elasticsearch() {
+  for _ in $(seq 1 60); do
+    if docker compose exec -T api python - <<'PY' >/dev/null 2>&1
+from app.search.client import create_elasticsearch_client
+
+client = create_elasticsearch_client()
+if not client.ping():
+    raise SystemExit(1)
+PY
+    then
+      return 0
+    fi
+
+    sleep 1
+  done
+
+  echo "Elasticsearch did not become ready from the API container" >&2
   exit 1
 }
 
@@ -29,6 +50,9 @@ require_command python3
 
 echo "Checking API health at $BASE_URL"
 wait_for_api
+
+echo "Checking Elasticsearch readiness"
+wait_for_elasticsearch
 
 echo "Ensuring Elasticsearch index exists"
 docker compose exec -T api python -m app.search.setup >/dev/null
