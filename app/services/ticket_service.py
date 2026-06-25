@@ -1,22 +1,13 @@
-import logging
-
 from sqlalchemy.orm import Session
 
+from app.db.unit_of_work import UnitOfWork
 from app.models.ticket import Ticket
-from app.repositories.ticket_repository import TicketRepository
 from app.schemas.ticket import TicketCreateRequest, TicketUpdateRequest
-from app.search.client import create_elasticsearch_client
-from app.search.documents import ticket_to_search_document
-from app.search.indexer import delete_ticket_document, index_ticket_document
-
-
-logger = logging.getLogger(__name__)
 
 
 class TicketService:
     def __init__(self, db: Session):
-        self.repository = TicketRepository(db)
-        self.db = db
+        self.uow = UnitOfWork(db)
 
     def create_ticket(self, payload: TicketCreateRequest) -> Ticket:
         ticket = Ticket(
@@ -29,21 +20,24 @@ class TicketService:
             tags=payload.tags,
         )
 
-        self.repository.add(ticket)
-        self.db.commit()
-        self.db.refresh(ticket)
-
         try:
-            client = create_elasticsearch_client()
-            document = ticket_to_search_document(ticket)
-            index_ticket_document(client, document)
-        except Exception:
-            logger.exception(
-                "Failed to index ticket in Elasticsearch",
-                extra={"ticket_id": ticket.id},
+            self.uow.tickets.add(ticket)
+
+            self.uow.outbox_events.add_event(
+                aggregate_type="ticket",
+                aggregate_id=ticket.id,
+                event_type="ticket.created",
+                payload={},
             )
 
-        return ticket
+            self.uow.commit()
+            self.uow.refresh(ticket)
+
+            return ticket
+
+        except Exception:
+            self.uow.rollback()
+            raise
 
     def list_tickets(
         self,
@@ -54,7 +48,7 @@ class TicketService:
         limit: int = 20,
         offset: int = 0,
     ) -> list[Ticket]:
-        return self.repository.get_all(
+        return self.uow.tickets.get_all(
             status=status,
             priority=priority,
             category=category,
@@ -64,70 +58,64 @@ class TicketService:
         )
 
     def get_ticket_by_id(self, ticket_id: int) -> Ticket | None:
-        return self.repository.get_by_id(ticket_id)
+        return self.uow.tickets.get_by_id(ticket_id)
 
     def update_ticket(
         self,
         ticket_id: int,
         payload: TicketUpdateRequest,
     ) -> Ticket | None:
-        ticket = self.repository.get_by_id(ticket_id)
+        ticket = self.uow.tickets.get_by_id(ticket_id)
 
         if ticket is None:
             return None
 
-        if payload.title is not None:
-            ticket.title = payload.title
+        update_data = payload.model_dump(exclude_unset=True)
 
-        if payload.description is not None:
-            ticket.description = payload.description
-
-        if payload.status is not None:
-            ticket.status = payload.status
-
-        if payload.priority is not None:
-            ticket.priority = payload.priority
-
-        if payload.category is not None:
-            ticket.category = payload.category
-
-        if payload.tags is not None:
-            ticket.tags = payload.tags
-
-        self.repository.update(ticket)
-        self.db.commit()
-        self.db.refresh(ticket)
+        for field, value in update_data.items():
+            setattr(ticket, field, value)
 
         try:
-            client = create_elasticsearch_client()
-            document = ticket_to_search_document(ticket)
-            index_ticket_document(client, document)
-        except Exception:
-            logger.exception(
-                "Failed to update ticket in Elasticsearch",
-                extra={"ticket_id": ticket.id},
+            self.uow.tickets.update(ticket)
+
+            self.uow.outbox_events.add_event(
+                aggregate_type="ticket",
+                aggregate_id=ticket.id,
+                event_type="ticket.updated",
+                payload={},
             )
 
-        return ticket
+            self.uow.commit()
+            self.uow.refresh(ticket)
+
+            return ticket
+
+        except Exception:
+            self.uow.rollback()
+            raise
 
     def delete_ticket(self, ticket_id: int) -> bool:
-        ticket = self.repository.get_by_id(ticket_id)
+        ticket = self.uow.tickets.get_by_id(ticket_id)
 
         if ticket is None:
             return False
 
         ticket_id_to_delete = ticket.id
 
-        self.repository.delete(ticket)
-        self.db.commit()
-
         try:
-            client = create_elasticsearch_client()
-            delete_ticket_document(client, ticket_id_to_delete)
-        except Exception:
-            logger.exception(
-                "Failed to delete ticket from Elasticsearch",
-                extra={"ticket_id": ticket_id_to_delete},
+            self.uow.tickets.delete(ticket)
+
+            self.uow.outbox_events.add_event(
+                aggregate_type="ticket",
+                aggregate_id=ticket_id_to_delete,
+                event_type="ticket.deleted",
+                payload={},
             )
 
-        return True
+            self.uow.commit()
+
+            return True
+
+        except Exception:
+            self.uow.rollback()
+            raise
