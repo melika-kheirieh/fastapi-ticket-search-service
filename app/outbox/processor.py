@@ -21,7 +21,7 @@ class OutboxProcessor:
         self.uow = UnitOfWork(db)
         self.search_client = search_client or create_elasticsearch_client()
 
-    def process_pending_events(
+    def process_events(
         self,
         limit: int = 20,
         max_retry_count: int = 3,

@@ -32,7 +32,7 @@ def main() -> None:
     db = SessionLocal()
     try:
         processor = OutboxProcessor(db)
-        result = processor.process_pending_events(
+        result = processor.process_events(
             limit=args.limit,
             max_retry_count=args.max_retry_count,
             processing_timeout_seconds=args.processing_timeout_seconds,

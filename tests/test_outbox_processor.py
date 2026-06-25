@@ -72,7 +72,7 @@ def test_processor_indexes_created_ticket_event(db_session, monkeypatch):
         search_client=FakeSearchClient(),
     )
 
-    result = processor.process_pending_events(limit=10)
+    result = processor.process_events(limit=10)
 
     event = db_session.query(OutboxEvent).one()
 
@@ -121,7 +121,7 @@ def test_processor_deletes_ticket_document_for_deleted_event(db_session, monkeyp
         search_client=FakeSearchClient(),
     )
 
-    result = processor.process_pending_events(limit=10)
+    result = processor.process_events(limit=10)
 
     events = (
         db_session.query(OutboxEvent)
@@ -172,7 +172,7 @@ def test_processor_marks_event_failed_when_indexing_fails(db_session, monkeypatc
         search_client=FakeSearchClient(),
     )
 
-    result = processor.process_pending_events(limit=10)
+    result = processor.process_events(limit=10)
 
     event = db_session.query(OutboxEvent).one()
 
@@ -199,7 +199,7 @@ def test_processor_marks_unknown_event_type_failed(db_session):
         search_client=FakeSearchClient(),
     )
 
-    result = processor.process_pending_events(limit=10)
+    result = processor.process_events(limit=10)
 
     event = db_session.query(OutboxEvent).one()
 
@@ -255,7 +255,7 @@ def test_processor_retries_failed_event_successfully(db_session, monkeypatch):
         search_client=FakeSearchClient(),
     )
 
-    result = processor.process_pending_events(
+    result = processor.process_events(
         limit=10,
         max_retry_count=3,
     )
@@ -326,7 +326,7 @@ def test_processor_does_not_retry_failed_event_after_max_retry_count(
         search_client=FakeSearchClient(),
     )
 
-    result = processor.process_pending_events(
+    result = processor.process_events(
         limit=10,
         max_retry_count=3,
     )
@@ -388,7 +388,7 @@ def test_processor_recovers_stuck_processing_event(db_session, monkeypatch):
         search_client=FakeSearchClient(),
     )
 
-    result = processor.process_pending_events(
+    result = processor.process_events(
         limit=10,
         max_retry_count=3,
         processing_timeout_seconds=300,
