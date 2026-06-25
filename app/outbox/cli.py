@@ -6,13 +6,19 @@ from app.outbox.processor import OutboxProcessor
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Process pending outbox events and sync them to Elasticsearch."
+        description="Process outbox events and sync them to Elasticsearch."
     )
     parser.add_argument(
         "--limit",
         type=int,
         default=20,
-        help="Maximum number of pending outbox events to process.",
+        help="Maximum number of outbox events to process.",
+    )
+    parser.add_argument(
+        "--max-retry-count",
+        type=int,
+        default=3,
+        help="Maximum retry count for failed outbox events.",
     )
 
     args = parser.parse_args()
@@ -20,7 +26,10 @@ def main() -> None:
     db = SessionLocal()
     try:
         processor = OutboxProcessor(db)
-        result = processor.process_pending_events(limit=args.limit)
+        result = processor.process_pending_events(
+            limit=args.limit,
+            max_retry_count=args.max_retry_count,
+        )
 
         print(
             "Outbox processing finished: "

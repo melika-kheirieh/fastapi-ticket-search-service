@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from sqlalchemy import and_, or_
 
 from app.models.outbox_event import OutboxEvent
 
@@ -40,6 +41,27 @@ class OutboxEventRepository:
         result = self.db.execute(stmt)
 
         return list(result.scalars().all())
+    
+    def get_processable_events(
+        self,
+        limit: int = 20,
+        max_retry_count: int = 3,
+    ) -> list[OutboxEvent]:
+        return (
+            self.db.query(OutboxEvent)
+            .filter(
+                or_(
+                    OutboxEvent.status == "pending",
+                    and_(
+                        OutboxEvent.status == "failed",
+                        OutboxEvent.retry_count < max_retry_count,
+                    ),
+                )
+            )
+            .order_by(OutboxEvent.created_at, OutboxEvent.id)
+            .limit(limit)
+            .all()
+        )
 
     def mark_processing(self, event: OutboxEvent) -> OutboxEvent:
         event.status = "processing"

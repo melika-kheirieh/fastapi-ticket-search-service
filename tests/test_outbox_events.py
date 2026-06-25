@@ -74,6 +74,7 @@ def test_outbox_event_repository_adds_event_without_committing(db_session):
     assert saved_event.status == "pending"
     assert saved_event.retry_count == 0
 
+
 def test_outbox_event_repository_gets_pending_events_in_order(db_session):
     repository = OutboxEventRepository(db_session)
 
@@ -101,6 +102,62 @@ def test_outbox_event_repository_gets_pending_events_in_order(db_session):
     pending_events = repository.get_pending_events(limit=10)
 
     assert [event.id for event in pending_events] == [first.id, second.id]
+
+
+def test_outbox_event_repository_gets_processable_events(db_session):
+    repository = OutboxEventRepository(db_session)
+
+    pending = repository.add_event(
+        aggregate_type="ticket",
+        aggregate_id=1,
+        event_type="ticket.created",
+    )
+    failed_retryable = repository.add_event(
+        aggregate_type="ticket",
+        aggregate_id=2,
+        event_type="ticket.created",
+    )
+    failed_exhausted = repository.add_event(
+        aggregate_type="ticket",
+        aggregate_id=3,
+        event_type="ticket.created",
+    )
+    processed = repository.add_event(
+        aggregate_type="ticket",
+        aggregate_id=4,
+        event_type="ticket.created",
+    )
+
+    db_session.commit()
+
+    repository.mark_failed(
+        failed_retryable,
+        error=RuntimeError("temporary failure"),
+    )
+    repository.mark_failed(
+        failed_exhausted,
+        error=RuntimeError("failure 1"),
+    )
+    repository.mark_failed(
+        failed_exhausted,
+        error=RuntimeError("failure 2"),
+    )
+    repository.mark_failed(
+        failed_exhausted,
+        error=RuntimeError("failure 3"),
+    )
+    repository.mark_processed(processed)
+    db_session.commit()
+
+    processable_events = repository.get_processable_events(
+        limit=10,
+        max_retry_count=3,
+    )
+
+    assert [event.id for event in processable_events] == [
+        pending.id,
+        failed_retryable.id,
+    ]
 
 
 def test_outbox_event_repository_marks_event_processing(db_session):

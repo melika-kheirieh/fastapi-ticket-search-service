@@ -21,8 +21,15 @@ class OutboxProcessor:
         self.uow = UnitOfWork(db)
         self.search_client = search_client or create_elasticsearch_client()
 
-    def process_pending_events(self, limit: int = 20) -> OutboxProcessingResult:
-        events = self.uow.outbox_events.get_pending_events(limit=limit)
+    def process_pending_events(
+        self,
+        limit: int = 20,
+        max_retry_count: int = 3,
+    ) -> OutboxProcessingResult:
+        events = self.uow.outbox_events.get_processable_events(
+            limit=limit,
+            max_retry_count=max_retry_count,
+        )
         result = OutboxProcessingResult()
 
         for event in events:
