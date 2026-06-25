@@ -3,7 +3,8 @@ from fastapi.testclient import TestClient
 
 from app.api.tickets import get_db
 from app.main import app
-
+from app.search.dependencies import get_elasticsearch_client
+from app.search.exceptions import SearchUnavailableError
 
 @pytest.fixture(autouse=True)
 def override_db_dependency():
@@ -143,3 +144,20 @@ def test_delete_ticket_returns_no_content(monkeypatch):
     assert response.status_code == 204
     assert response.content == b""
     assert calls["ticket_id"] == 1
+
+
+def test_search_tickets_returns_503_when_search_backend_is_unavailable(monkeypatch):
+    def fake_search_ticket_documents(client, **kwargs):
+        raise SearchUnavailableError("Search backend is unavailable")
+
+    monkeypatch.setattr(
+        "app.api.tickets.search_ticket_documents",
+        fake_search_ticket_documents,
+    )
+    app.dependency_overrides[get_elasticsearch_client] = lambda: object()
+
+    client = TestClient(app)
+    response = client.get("/tickets/search", params={"q": "payment"})
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Search is temporarily unavailable"}

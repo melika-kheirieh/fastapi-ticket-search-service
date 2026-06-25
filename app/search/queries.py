@@ -2,8 +2,29 @@ from datetime import datetime
 from typing import Any
 
 from elasticsearch import Elasticsearch
+from elastic_transport import (
+    ApiError,
+    ConnectionError,
+    ConnectionTimeout,
+    SerializationError,
+    TransportError,
+)
 
 from app.core.config import settings
+from app.search.exceptions import SearchUnavailableError
+
+
+def _is_elasticsearch_exception(exc: Exception) -> bool:
+    return isinstance(
+        exc,
+        (
+            ApiError,
+            ConnectionError,
+            ConnectionTimeout,
+            SerializationError,
+            TransportError,
+        ),
+    )
 
 
 def build_ticket_search_query(
@@ -45,11 +66,7 @@ def build_ticket_search_query(
         filters.append({"range": {"created_at": created_at_range}})
 
     if query is None:
-        must = [
-            {
-                "match_all": {}
-            }
-        ]
+        must = [{"match_all": {}}]
     else:
         must = [
             {
@@ -116,20 +133,25 @@ def search_tickets(
 ) -> list[dict[str, Any]]:
     resolved_index_name = index_name or settings.ticket_search_index
 
-    response = client.search(
-        index=resolved_index_name,
-        body=build_ticket_search_body(
-            query=query,
-            status=status,
-            priority=priority,
-            category=category,
-            tag=tag,
-            user_id=user_id,
-            created_from=created_from,
-            created_to=created_to,
-            limit=limit,
-            offset=offset,
-        ),
-    )
+    try:
+        response = client.search(
+            index=resolved_index_name,
+            body=build_ticket_search_body(
+                query=query,
+                status=status,
+                priority=priority,
+                category=category,
+                tag=tag,
+                user_id=user_id,
+                created_from=created_from,
+                created_to=created_to,
+                limit=limit,
+                offset=offset,
+            ),
+        )
+    except Exception as exc:
+        if _is_elasticsearch_exception(exc):
+            raise SearchUnavailableError("Search backend is unavailable") from exc
+        raise
 
     return [hit["_source"] for hit in response["hits"]["hits"]]

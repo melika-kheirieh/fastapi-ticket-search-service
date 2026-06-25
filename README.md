@@ -8,7 +8,7 @@ The core design idea is simple:
 
 **PostgreSQL is the source of truth. Elasticsearch is a query-optimized search projection.**
 
-This project is not just an Elasticsearch demo. It is a backend service that shows persistence, migrations, API design, search query construction, reindexing, tests, CI, and Docker-based verification.
+This project is not just an Elasticsearch demo. It is a backend service that shows persistence, migrations, API design, search query construction, controlled search failure handling, reindexing, tests, CI, and Docker-based verification.
 
 ## Features
 
@@ -21,6 +21,7 @@ This project is not just an Elasticsearch demo. It is a backend service that sho
 - Elasticsearch explicit index mapping
 - Full-text ticket search
 - Isolated Elasticsearch query builder
+- Controlled `503 Service Unavailable` response for search backend failures
 - Reindex flow from PostgreSQL to Elasticsearch
 - Unit/API tests with pytest
 - Docker Compose local stack
@@ -49,7 +50,7 @@ flowchart LR
     API --> ES["Elasticsearch"]
     DB --> Reindex["Reindex Script"]
     Reindex --> ES
-```
+````
 
 Application boundaries:
 
@@ -63,30 +64,30 @@ PostgreSQL owns the durable ticket state. Elasticsearch stores a derived search 
 
 ## API Overview
 
-| Method | Endpoint | Purpose |
-| --- | --- | --- |
-| `GET` | `/health` | Health check |
-| `POST` | `/tickets` | Create a ticket |
-| `GET` | `/tickets` | List tickets with filters and pagination |
-| `GET` | `/tickets/{ticket_id}` | Get one ticket |
-| `PATCH` | `/tickets/{ticket_id}` | Update a ticket |
-| `DELETE` | `/tickets/{ticket_id}` | Delete a ticket |
-| `GET` | `/tickets/search` | Search tickets with Elasticsearch |
+| Method   | Endpoint               | Purpose                                  |
+| -------- | ---------------------- | ---------------------------------------- |
+| `GET`    | `/health`              | Health check                             |
+| `POST`   | `/tickets`             | Create a ticket                          |
+| `GET`    | `/tickets`             | List tickets with filters and pagination |
+| `GET`    | `/tickets/{ticket_id}` | Get one ticket                           |
+| `PATCH`  | `/tickets/{ticket_id}` | Update a ticket                          |
+| `DELETE` | `/tickets/{ticket_id}` | Delete a ticket                          |
+| `GET`    | `/tickets/search`      | Search tickets with Elasticsearch        |
 
 ## Ticket Fields
 
 A ticket contains:
 
-- `id`
-- `user_id`
-- `title`
-- `description`
-- `status`
-- `priority`
-- `category`
-- `tags`
-- `created_at`
-- `updated_at`
+* `id`
+* `user_id`
+* `title`
+* `description`
+* `status`
+* `priority`
+* `category`
+* `tags`
+* `created_at`
+* `updated_at`
 
 ## Search Behavior
 
@@ -94,24 +95,37 @@ The search endpoint supports full-text search and exact filters.
 
 Supported query parameters include:
 
-| Parameter | Purpose |
-| --- | --- |
-| `q` | Full-text search across ticket title and description |
-| `user_id` | Filter by ticket owner |
-| `status` | Filter by ticket status |
-| `priority` | Filter by priority |
-| `category` | Filter by category |
-| `tag` | Filter by one tag |
-| `created_from` | Filter tickets created at or after this timestamp |
-| `created_to` | Filter tickets created at or before this timestamp |
-| `limit` | Limit result count |
-| `offset` | Skip result count for pagination |
+| Parameter      | Purpose                                              |
+| -------------- | ---------------------------------------------------- |
+| `q`            | Full-text search across ticket title and description |
+| `user_id`      | Filter by ticket owner                               |
+| `status`       | Filter by ticket status                              |
+| `priority`     | Filter by priority                                   |
+| `category`     | Filter by category                                   |
+| `tag`          | Filter by one tag                                    |
+| `created_from` | Filter tickets created at or after this timestamp    |
+| `created_to`   | Filter tickets created at or before this timestamp   |
+| `limit`        | Limit result count                                   |
+| `offset`       | Skip result count for pagination                     |
 
 Example:
 
 ```bash
 curl "http://localhost:8001/tickets/search?q=payment&status=open&tag=checkout&limit=10&offset=0"
 ```
+
+### Search Failure Behavior
+
+Search results and search availability are handled as separate cases:
+
+| Scenario                              | Response                     |
+| ------------------------------------- | ---------------------------- |
+| Search succeeds with matching tickets | `200 OK` with ticket results |
+| Search succeeds with no matches       | `200 OK` with `[]`           |
+| Invalid search parameters             | `422 Unprocessable Entity`   |
+| Search backend is unavailable         | `503 Service Unavailable`    |
+
+The search endpoint does not return an empty list when Elasticsearch is unavailable, because that would incorrectly imply that the search completed successfully with no matches.
 
 ## Local Development
 
@@ -239,11 +253,11 @@ bash scripts/verify_search_flow.sh
 
 The search smoke script verifies the main search flow from outside the application:
 
-- the API is reachable;
-- the Elasticsearch index exists;
-- a ticket can be created through the API;
-- the created ticket is synced into the search projection;
-- the ticket can be found through the search endpoint.
+* the API is reachable;
+* the Elasticsearch index exists;
+* a ticket can be created through the API;
+* the created ticket is synced into the search projection;
+* the ticket can be found through the search endpoint.
 
 By default, smoke scripts target:
 
@@ -267,15 +281,16 @@ pytest -q
 
 Current test coverage focuses on:
 
-- ticket CRUD API behavior;
-- service/repository boundaries;
-- request validation;
-- filtering and pagination;
-- Elasticsearch mapping;
-- Elasticsearch document conversion;
-- Elasticsearch query building;
-- search API behavior with fake search clients;
-- reindex behavior.
+* ticket CRUD API behavior;
+* service/repository boundaries;
+* request validation;
+* filtering and pagination;
+* Elasticsearch mapping;
+* Elasticsearch document conversion;
+* Elasticsearch query building;
+* search API behavior with fake search clients;
+* controlled search backend failure handling;
+* reindex behavior.
 
 The fast test suite is designed to run without a live PostgreSQL or Elasticsearch service.
 
@@ -299,6 +314,12 @@ Ticket data is stored and updated in PostgreSQL. Elasticsearch is not treated as
 
 Search documents are derived from ticket records. If Elasticsearch becomes stale, the index can be rebuilt from PostgreSQL.
 
+### Search failures are explicit
+
+The search API treats Elasticsearch failures as search subsystem failures. If Elasticsearch is unavailable, `/tickets/search` returns `503 Service Unavailable` instead of returning a misleading empty result set.
+
+The search layer translates backend-specific failures into an internal `SearchUnavailableError`, and the API layer maps that error to an HTTP response.
+
 ### Query building is isolated
 
 Elasticsearch query construction lives in a separate module so search behavior can be tested without running Elasticsearch.
@@ -321,21 +342,20 @@ The next reliability step is an outbox-based workflow for safer asynchronous ind
 
 This project does not currently include:
 
-- authentication or authorization;
-- outbox-based indexing;
-- async indexing with Redis/Celery;
-- advanced observability;
-- production Elasticsearch cluster configuration;
-- cloud deployment;
-- semantic or hybrid search.
+* authentication or authorization;
+* outbox-based indexing;
+* async indexing with Redis/Celery;
+* advanced observability;
+* production Elasticsearch cluster configuration;
+* cloud deployment;
+* semantic or hybrid search.
 
 ## Roadmap
 
 Planned next steps:
 
-- improve Elasticsearch failure handling;
-- add an outbox table for reliable indexing events;
-- add retry handling for failed search sync;
-- add structured logging and lightweight observability;
-- add semantic or hybrid search with embeddings;
-- add Persian search quality improvements.
+* add an outbox table for reliable indexing events;
+* add retry handling for failed search sync;
+* add structured logging and lightweight observability;
+* add semantic or hybrid search with embeddings;
+* add Persian search quality improvements.

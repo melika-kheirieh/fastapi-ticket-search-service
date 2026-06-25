@@ -17,7 +17,8 @@ from app.schemas.ticket import (
     TicketResponse,
     TicketUpdateRequest,
 )
-from app.search.client import create_elasticsearch_client
+from app.search.dependencies import get_elasticsearch_client
+from app.search.exceptions import SearchUnavailableError
 from app.search.queries import search_tickets as search_ticket_documents
 from app.services.ticket_service import TicketService
 
@@ -72,22 +73,27 @@ def search_tickets(
     created_to: datetime | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
+    search_client=Depends(get_elasticsearch_client),
 ):
-    client = create_elasticsearch_client()
-
-    return search_ticket_documents(
-        client=client,
-        query=q,
-        status=status,
-        priority=priority,
-        category=category,
-        tag=tag,
-        user_id=user_id,
-        created_from=created_from,
-        created_to=created_to,
-        limit=limit,
-        offset=offset,
-    )
+    try:
+        return search_ticket_documents(
+            client=search_client,
+            query=q,
+            status=status,
+            priority=priority,
+            category=category,
+            tag=tag,
+            user_id=user_id,
+            created_from=created_from,
+            created_to=created_to,
+            limit=limit,
+            offset=offset,
+        )
+    except SearchUnavailableError as exc:
+        raise HTTPException(
+            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Search is temporarily unavailable",
+        ) from exc
 
 
 @router.get("/{ticket_id}", response_model=TicketResponse)
