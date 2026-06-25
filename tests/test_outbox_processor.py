@@ -1,3 +1,5 @@
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -24,6 +26,8 @@ def db_session():
         db.close()
         engine.dispose()
 
+def utc_now_naive() -> datetime:
+    return datetime.now(UTC).replace(tzinfo=None)
 
 class FakeSearchClient:
     pass
@@ -334,3 +338,72 @@ def test_processor_does_not_retry_failed_event_after_max_retry_count(
     assert index_calls == []
     assert event.status == "failed"
     assert event.retry_count == 3
+
+
+def test_processor_recovers_stuck_processing_event(db_session, monkeypatch):
+    indexed_documents = []
+
+    def fake_ticket_to_search_document(ticket):
+        return {
+            "id": ticket.id,
+            "title": ticket.title,
+        }
+
+    def fake_index_ticket_document(client, document):
+        indexed_documents.append(document)
+
+    monkeypatch.setattr(
+        "app.outbox.processor.ticket_to_search_document",
+        fake_ticket_to_search_document,
+    )
+    monkeypatch.setattr(
+        "app.outbox.processor.index_ticket_document",
+        fake_index_ticket_document,
+    )
+
+    service = TicketService(db_session)
+    ticket = service.create_ticket(
+        TicketCreateRequest(
+            user_id=1,
+            title="Recover me",
+            description="This processing event should be recovered.",
+            status="open",
+            priority="high",
+            category="auth",
+            tags=["recovery"],
+        )
+    )
+
+    event = db_session.query(OutboxEvent).one()
+
+    repository = OutboxEventRepository(db_session)
+    repository.mark_processing(event)
+    db_session.commit()
+
+    event.updated_at = utc_now_naive() - timedelta(seconds=600)
+    db_session.commit()
+
+    processor = OutboxProcessor(
+        db=db_session,
+        search_client=FakeSearchClient(),
+    )
+
+    result = processor.process_pending_events(
+        limit=10,
+        max_retry_count=3,
+        processing_timeout_seconds=300,
+    )
+
+    db_session.refresh(event)
+
+    assert result.processed == 1
+    assert result.failed == 0
+    assert indexed_documents == [
+        {
+            "id": ticket.id,
+            "title": "Recover me",
+        }
+    ]
+    assert event.status == "processed"
+    assert event.processed_at is not None
+    assert event.last_error is None

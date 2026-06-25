@@ -1,3 +1,5 @@
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -21,6 +23,8 @@ def db_session():
         db.close()
         engine.dispose()
 
+def utc_now_naive() -> datetime:
+    return datetime.now(UTC).replace(tzinfo=None)
 
 def test_can_store_outbox_event(db_session):
     event = OutboxEvent(
@@ -157,6 +161,40 @@ def test_outbox_event_repository_gets_processable_events(db_session):
     assert [event.id for event in processable_events] == [
         pending.id,
         failed_retryable.id,
+    ]
+
+
+def test_outbox_event_repository_gets_stuck_processing_events(db_session):
+    repository = OutboxEventRepository(db_session)
+
+    fresh_processing = repository.add_event(
+        aggregate_type="ticket",
+        aggregate_id=1,
+        event_type="ticket.created",
+    )
+    stuck_processing = repository.add_event(
+        aggregate_type="ticket",
+        aggregate_id=2,
+        event_type="ticket.created",
+    )
+
+    db_session.commit()
+
+    repository.mark_processing(fresh_processing)
+    repository.mark_processing(stuck_processing)
+    db_session.commit()
+
+    stuck_processing.updated_at = utc_now_naive() - timedelta(seconds=600)
+    db_session.commit()
+
+    processable_events = repository.get_processable_events(
+        limit=10,
+        max_retry_count=3,
+        processing_timeout_seconds=300,
+    )
+
+    assert [event.id for event in processable_events] == [
+        stuck_processing.id,
     ]
 
 

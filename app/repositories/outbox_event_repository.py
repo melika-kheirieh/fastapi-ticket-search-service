@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -46,7 +46,12 @@ class OutboxEventRepository:
         self,
         limit: int = 20,
         max_retry_count: int = 3,
+        processing_timeout_seconds: int = 300,
     ) -> list[OutboxEvent]:
+        processing_deadline = datetime.now(timezone.utc) - timedelta(
+            seconds=processing_timeout_seconds
+        )
+
         return (
             self.db.query(OutboxEvent)
             .filter(
@@ -55,6 +60,11 @@ class OutboxEventRepository:
                     and_(
                         OutboxEvent.status == "failed",
                         OutboxEvent.retry_count < max_retry_count,
+                    ),
+                    and_(
+                        OutboxEvent.status == "processing",
+                        OutboxEvent.retry_count < max_retry_count,
+                        OutboxEvent.updated_at < processing_deadline,
                     ),
                 )
             )

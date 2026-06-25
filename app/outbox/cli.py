@@ -20,6 +20,12 @@ def main() -> None:
         default=3,
         help="Maximum retry count for failed outbox events.",
     )
+    parser.add_argument(
+        "--processing-timeout-seconds",
+        type=int,
+        default=300,
+        help="Seconds after which a processing outbox event is considered stuck.",
+    )
 
     args = parser.parse_args()
 
@@ -29,6 +35,7 @@ def main() -> None:
         result = processor.process_pending_events(
             limit=args.limit,
             max_retry_count=args.max_retry_count,
+            processing_timeout_seconds=args.processing_timeout_seconds,
         )
 
         print(

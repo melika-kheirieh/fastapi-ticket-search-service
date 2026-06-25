@@ -25,10 +25,12 @@ class OutboxProcessor:
         self,
         limit: int = 20,
         max_retry_count: int = 3,
+        processing_timeout_seconds: int = 300,
     ) -> OutboxProcessingResult:
         events = self.uow.outbox_events.get_processable_events(
             limit=limit,
             max_retry_count=max_retry_count,
+            processing_timeout_seconds=processing_timeout_seconds,
         )
         result = OutboxProcessingResult()
 
