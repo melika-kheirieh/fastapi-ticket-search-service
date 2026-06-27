@@ -1,6 +1,13 @@
+x-app-build: &app-build
+  context: .
+  args:
+    PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+    PIP_RETRIES: ${PIP_RETRIES:-10}
+    PIP_TIMEOUT: ${PIP_TIMEOUT:-120}
+
 services:
   api:
-    build: .
+    build: *app-build
     container_name: ticket_api
     ports:
       - "8001:8000"
@@ -10,12 +17,34 @@ services:
       DATABASE_URL: postgresql+psycopg://ticket_user:ticket_password@postgres:5432/ticket_db
       ELASTICSEARCH_URL: http://elasticsearch:9200
       TICKET_SEARCH_INDEX: tickets_v1
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
     depends_on:
       migrate:
         condition: service_completed_successfully
 
+  worker:
+    build: *app-build
+    container_name: ticket_worker
+    command: ["celery", "-A", "app.celery_app.celery_app", "worker", "--loglevel=info"]
+    environment:
+      APP_NAME: FastAPI Ticket Search Service
+      ENVIRONMENT: local
+      DATABASE_URL: postgresql+psycopg://ticket_user:ticket_password@postgres:5432/ticket_db
+      ELASTICSEARCH_URL: http://elasticsearch:9200
+      TICKET_SEARCH_INDEX: tickets_v1
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+      elasticsearch:
+        condition: service_started
+
   migrate:
-    build: .
+    build: *app-build
     environment:
       DATABASE_URL: postgresql+psycopg://ticket_user:ticket_password@postgres:5432/ticket_db
     depends_on:
@@ -41,6 +70,12 @@ services:
       timeout: 5s
       retries: 10
 
+  redis:
+    image: redis:7-alpine
+    container_name: ticket_redis
+    ports:
+      - "6379:6379"
+
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.14.3
     container_name: ticket_elasticsearch
@@ -52,6 +87,24 @@ services:
       - "9200:9200"
     volumes:
       - ticket_elasticsearch_data:/usr/share/elasticsearch/data
+
+  beat:
+    build: *app-build
+    container_name: ticket_beat
+    command: ["celery", "-A", "app.celery_app.celery_app", "beat", "--loglevel=info"]
+    environment:
+      APP_NAME: FastAPI Ticket Search Service
+      ENVIRONMENT: local
+      DATABASE_URL: postgresql+psycopg://ticket_user:ticket_password@postgres:5432/ticket_db
+      ELASTICSEARCH_URL: http://elasticsearch:9200
+      TICKET_SEARCH_INDEX: tickets_v1
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
 
 volumes:
   ticket_postgres_data:
