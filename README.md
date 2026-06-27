@@ -1,290 +1,206 @@
 # FastAPI Ticket Search Service
 
 [![CI](https://github.com/melika-kheirieh/fastapi-ticket-search-service/actions/workflows/ci.yml/badge.svg)](https://github.com/melika-kheirieh/fastapi-ticket-search-service/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/Python-3.12-blue)
+![FastAPI](https://img.shields.io/badge/FastAPI-API-009688)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-source%20of%20truth-336791)
+![Elasticsearch](https://img.shields.io/badge/Elasticsearch-search%20projection-005571)
+![Tests](https://img.shields.io/badge/tests-pytest-brightgreen)
 
-A production-aware backend learning project for managing support tickets with PostgreSQL and searching them with Elasticsearch.
+A production-aware backend learning project for managing support tickets with PostgreSQL and searching them through an Elasticsearch projection.
 
-The core design idea is simple:
+**PostgreSQL is the durable source of truth. Elasticsearch is a rebuildable, query-optimized search projection.**
 
-**PostgreSQL is the source of truth. Elasticsearch is a query-optimized search projection.**
+This is not just an Elasticsearch demo. It is a small backend system that shows API design, persistence, migrations, search mapping, query construction, outbox-based indexing, reindexing, tests, Docker Compose verification, and lightweight observability.
 
-This project is not just an Elasticsearch demo. It is a backend service that demonstrates persistence, migrations, API design, search query construction, controlled search failure handling, outbox-backed indexing, retryable processing, reindexing, tests, CI, and Docker-based verification.
+## Highlights
 
-## Features
+- FastAPI REST API for ticket create/read/update/delete
+- PostgreSQL persistence with SQLAlchemy repositories and Alembic migrations
+- Database-backed filtering and pagination
+- Elasticsearch `tickets_v1` index with explicit mapping
+- Search endpoint with full-text query, exact filters, tag filter, date range, pagination, and sorting
+- Durable outbox events for ticket-to-search synchronization
+- Retry metadata for failed indexing events
+- Reindex command to rebuild Elasticsearch from PostgreSQL
+- Request id middleware and structured JSON logs
+- Separate `/health` and `/health/search` endpoints
+- Docker Compose stack with PostgreSQL, Elasticsearch, migration, and API services
+- pytest coverage and GitHub Actions CI
 
-* FastAPI REST API
-* PostgreSQL persistence
-* SQLAlchemy model, repository, service, and Unit of Work layers
-* Alembic migrations
-* Ticket CRUD endpoints
-* Filtering and pagination
-* Elasticsearch explicit index mapping
-* Full-text ticket search
-* Isolated Elasticsearch query builder
-* Controlled `503 Service Unavailable` response for search backend failures
-* Outbox-backed Elasticsearch synchronization
-* Retry handling for failed outbox events
-* Recovery for stuck `processing` outbox events
-* Manual outbox processor runner
-* Reindex flow from PostgreSQL to Elasticsearch
-* Unit/API tests with pytest
-* Docker Compose local stack
-* End-to-end search smoke script
-* GitHub Actions CI with fast tests and Docker smoke verification
+## Reviewer Guide
 
-## Tech Stack
+If you are reviewing the project quickly, start here:
 
-* Python 3.12
-* FastAPI
-* Pydantic
-* SQLAlchemy
-* Alembic
-* PostgreSQL
-* Elasticsearch
-* Docker Compose
-* pytest
-* GitHub Actions
+| Topic | Where to look | What it shows |
+| --- | --- | --- |
+| Architecture | [docs/architecture.md](docs/architecture.md) | Write path, search path, outbox sync, recovery model |
+| Design decisions | [docs/design-decisions.md](docs/design-decisions.md) | Tradeoffs behind PostgreSQL, Elasticsearch, outbox, reindexing, and health checks |
+| Operations | [docs/operations.md](docs/operations.md) | How to run, verify, debug, and reset the stack |
+| Roadmap | [docs/roadmap.md](docs/roadmap.md) | Completed phases, next steps, intentionally deferred scope |
 
-## Architecture
+Important implementation areas:
+
+- [app/services/ticket_service.py](app/services/ticket_service.py): ticket write orchestration
+- [app/repositories/outbox_event_repository.py](app/repositories/outbox_event_repository.py): durable outbox state
+- [app/services/outbox_processor.py](app/services/outbox_processor.py): projection sync and retry behavior
+- [app/search/queries.py](app/search/queries.py): testable Elasticsearch query construction
+- [app/search/reindex.py](app/search/reindex.py): projection rebuild from PostgreSQL
+- [app/main.py](app/main.py): request ids, health checks, and router wiring
+
+## Project Status
+
+The first three phases are complete:
+
+| Phase | Status | Main outcome |
+| --- | --- | --- |
+| Phase 1 | Complete | Ticket CRUD API, PostgreSQL persistence, Alembic migrations, filters, pagination, Docker Compose, CI |
+| Phase 2 | Complete | Elasticsearch mapping, index setup, outbox events, retryable processor, reindex command, search API |
+| Phase 3 | Complete | Request ids, structured JSON logs, search health endpoint, smoke verification script |
+
+Current intentional exclusions:
+
+- Authentication and authorization
+- Production deployment setup
+- A continuously running background worker container for the outbox processor
+- Advanced search features such as Persian analyzers, highlighting, suggestions, or embeddings
+
+## Architecture Summary
+
+The write path commits ticket data and outbox events to PostgreSQL:
 
 ```mermaid
-flowchart LR
-    Client["Client"] --> API["FastAPI API"]
-
-    API --> Service["TicketService"]
-    Service --> UOW["Unit of Work"]
-    UOW --> DB["PostgreSQL"]
-
-    DB --> Outbox["outbox_events"]
-    Outbox --> Processor["Outbox Processor"]
-    Processor --> ES["Elasticsearch"]
-
-    DB --> Reindex["Reindex Script"]
-    Reindex --> ES
-
-    API --> Search["Search API"]
-    Search --> QueryBuilder["Query Builder"]
-    QueryBuilder --> ES
+flowchart TD
+    A["Ticket API"] --> B["TicketService"]
+    B --> C["PostgreSQL ticket row"]
+    B --> D["PostgreSQL outbox event"]
 ```
 
-Application boundaries:
+The search path reads from Elasticsearch:
 
-```text
-Write path:
-API Router -> TicketService -> Unit of Work -> TicketRepository + OutboxEventRepository -> PostgreSQL
-
-Search sync path:
-Outbox Processor -> outbox_events -> PostgreSQL ticket state -> Elasticsearch
-
-Search path:
-Search API -> Query Builder -> Elasticsearch
-
-Repair path:
-Reindex Script -> PostgreSQL -> Elasticsearch
+```mermaid
+flowchart TD
+    A["GET /tickets/search"] --> B["Query builder"]
+    B --> C["Elasticsearch tickets_v1"]
+    C --> D["TicketResponse list"]
 ```
 
-PostgreSQL owns the durable ticket state. Elasticsearch stores a derived search document that can be rebuilt from PostgreSQL if the search index becomes stale or unavailable.
+The projection can be repaired through retries or rebuilt fully from PostgreSQL:
 
-Ticket writes do not update Elasticsearch directly from the service layer. Instead, ticket changes create outbox events in the same database transaction. A separate outbox processor reads those events and synchronizes the Elasticsearch projection.
+```mermaid
+flowchart TD
+    A["Outbox event or reindex"] --> B["Search document"]
+    B --> C["Elasticsearch projection"]
+```
 
-## API Overview
+The consistency model is intentional:
 
-| Method   | Endpoint               | Purpose                                  |
-| -------- | ---------------------- | ---------------------------------------- |
-| `GET`    | `/health`              | Health check                             |
-| `POST`   | `/tickets`             | Create a ticket                          |
-| `GET`    | `/tickets`             | List tickets with filters and pagination |
-| `GET`    | `/tickets/{ticket_id}` | Get one ticket                           |
-| `PATCH`  | `/tickets/{ticket_id}` | Update a ticket                          |
-| `DELETE` | `/tickets/{ticket_id}` | Delete a ticket                          |
-| `GET`    | `/tickets/search`      | Search tickets with Elasticsearch        |
+- PostgreSQL writes are strongly consistent inside the database transaction.
+- Elasticsearch search is eventually consistent and rebuildable.
+- Search outages do not prevent ticket writes.
 
-## Ticket Fields
+## API
 
-A ticket contains:
+Health:
 
-* `id`
-* `user_id`
-* `title`
-* `description`
-* `status`
-* `priority`
-* `category`
-* `tags`
-* `created_at`
-* `updated_at`
+```http
+GET /health
+GET /health/search
+```
 
-## Search Behavior
+Tickets:
 
-The search endpoint supports full-text search and exact filters.
+```http
+POST /tickets
+GET /tickets
+GET /tickets/search
+GET /tickets/{ticket_id}
+PATCH /tickets/{ticket_id}
+DELETE /tickets/{ticket_id}
+```
 
-Supported query parameters include:
+Create a ticket:
 
-| Parameter      | Purpose                                              |
-| -------------- | ---------------------------------------------------- |
-| `q`            | Full-text search across ticket title and description |
-| `user_id`      | Filter by ticket owner                               |
-| `status`       | Filter by ticket status                              |
-| `priority`     | Filter by priority                                   |
-| `category`     | Filter by category                                   |
-| `tag`          | Filter by one tag                                    |
-| `created_from` | Filter tickets created at or after this timestamp    |
-| `created_to`   | Filter tickets created at or before this timestamp   |
-| `limit`        | Limit result count                                   |
-| `offset`       | Skip result count for pagination                     |
+```bash
+curl -X POST "http://localhost:8001/tickets" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": 1,
+    "title": "Payment failed",
+    "description": "Customer payment failed during checkout.",
+    "status": "open",
+    "priority": "high",
+    "category": "billing",
+    "tags": ["payment", "checkout"]
+  }'
+```
 
-Example:
+List tickets with database filters:
+
+```bash
+curl "http://localhost:8001/tickets?status=open&category=billing&limit=10&offset=0"
+```
+
+Search tickets through Elasticsearch:
 
 ```bash
 curl "http://localhost:8001/tickets/search?q=payment&status=open&tag=checkout&limit=10&offset=0"
 ```
 
-### Search Failure Behavior
+## Search Projection
 
-Search results and search availability are handled as separate cases.
+The Elasticsearch index is named `tickets_v1`.
 
-| Scenario                              | Response                     |
-| ------------------------------------- | ---------------------------- |
-| Search succeeds with matching tickets | `200 OK` with ticket results |
-| Search succeeds with no matches       | `200 OK` with `[]`           |
-| Invalid search parameters             | `422 Unprocessable Entity`   |
-| Search backend is unavailable         | `503 Service Unavailable`    |
+The mapping lives in [app/search/mappings.py](app/search/mappings.py). Important field choices:
 
-The search endpoint does not return an empty list when Elasticsearch is unavailable, because that would incorrectly imply that the search completed successfully with no matches.
+| Field | Type | Purpose |
+| --- | --- | --- |
+| `title`, `description` | `text` | Full-text search |
+| `status`, `priority`, `category`, `tags` | `keyword` | Exact filtering |
+| `user_id` | `long` | Owner filter |
+| `created_at`, `updated_at` | `date` | Sorting, ranges, freshness |
 
-## Outbox-backed Elasticsearch Sync
+Ticket writes create durable outbox events:
 
-PostgreSQL is the source of truth in this project. Elasticsearch is used as a search projection, not as the primary data store.
+| API action | Outbox event |
+| --- | --- |
+| `POST /tickets` | `ticket.created` |
+| `PATCH /tickets/{ticket_id}` | `ticket.updated` |
+| `DELETE /tickets/{ticket_id}` | `ticket.deleted` |
 
-Earlier versions of the service updated Elasticsearch directly from `TicketService` after ticket create/update/delete operations. That approach was simple, but it had a reliability gap: the database transaction could succeed while Elasticsearch indexing failed, leaving only a log message and no durable recovery signal.
+If search sync fails, the outbox event keeps `retry_count`, `last_error`, and `next_attempt_at`.
 
-The current design uses an outbox table.
-
-When a ticket is created, updated, or deleted, the service writes both the ticket change and an outbox event in the same PostgreSQL transaction:
-
-* `ticket.created`
-* `ticket.updated`
-* `ticket.deleted`
-
-A separate outbox processor reads processable events and syncs Elasticsearch.
-
-This keeps the application service focused on the main use case and moves search projection synchronization into a separate component.
-
-### Outbox Event Lifecycle
-
-Outbox events can move through these statuses:
-
-* `pending`
-* `processing`
-* `processed`
-* `failed`
-
-The processor supports:
-
-* processing new `pending` events;
-* retrying `failed` events up to a configurable retry limit;
-* recovering stuck `processing` events after a timeout.
-
-This means an Elasticsearch failure does not silently lose the sync signal. The event remains in PostgreSQL with `retry_count`, `last_error`, `processed_at`, `created_at`, and `updated_at` fields for debugging and recovery.
-
-### Processing Outbox Events Manually
-
-For local development, process outbox events with:
+Rebuild the full projection from PostgreSQL:
 
 ```bash
-./scripts/process_outbox_events.sh --limit 20 --max-retry-count 3 --processing-timeout-seconds 300
+python -m app.search.reindex
 ```
 
-This command processes:
+## Quick Start
 
-* new `pending` events;
-* retryable `failed` events;
-* stuck `processing` events older than the configured timeout.
-
-The Docker-based smoke flow also uses the outbox processor:
-
-```bash
-./scripts/verify_search_flow.sh
-```
-
-That smoke script verifies the full outbox-backed search flow:
-
-```text
-create ticket -> outbox event -> processor -> Elasticsearch -> search result
-update ticket -> outbox event -> processor -> Elasticsearch -> updated result
-delete ticket -> outbox event -> processor -> Elasticsearch -> removed result
-```
-
-### Intentional Scope
-
-The current processor is a simple single-run processor, not a distributed worker system.
-
-The project intentionally does not introduce Celery, Redis-backed workers, multi-worker locking, or `FOR UPDATE SKIP LOCKED` yet. Those would be natural next steps, but the current implementation focuses on the core reliability boundary first:
-
-* durable event creation;
-* transaction-safe ticket and outbox writes;
-* retryable processing;
-* stuck event recovery;
-* testable processor behavior.
-
-## Local Development
-
-Create and activate a virtual environment:
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-```
-
-Install dependencies:
-
-```bash
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-```
-
-Run tests:
-
-```bash
-pytest -q
-```
-
-Run the API locally without Docker:
-
-```bash
-uvicorn app.main:app --reload
-```
-
-Health check:
-
-```bash
-curl http://localhost:8000/health
-```
-
-## Docker Compose
-
-Build and start the full local stack:
+Start the full local stack:
 
 ```bash
 docker compose up --build -d
 ```
 
-Check service status:
+Create the Elasticsearch ticket index:
 
 ```bash
-docker compose ps -a
+docker compose exec api python -m app.search.setup
 ```
 
-The API is available at:
+Check health:
 
-```text
-http://localhost:8001
+```bash
+curl http://localhost:8001/health
+curl http://localhost:8001/health/search
 ```
 
-OpenAPI docs:
+Run the smoke flow:
 
-```text
-http://localhost:8001/docs
+```bash
+scripts/verify_search_flow.sh
 ```
 
 Stop the stack:
@@ -293,92 +209,26 @@ Stop the stack:
 docker compose down
 ```
 
-Remove local volumes when you need a clean reset:
+More commands and troubleshooting notes are in [docs/operations.md](docs/operations.md).
+
+## Local Python Development
 
 ```bash
-docker compose down -v
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+alembic upgrade head
+uvicorn app.main:app --reload
 ```
 
-Use `down -v` carefully in local development because it removes PostgreSQL and Elasticsearch volumes.
-
-## Database Migrations
-
-Run migrations inside the API container:
+Local API health:
 
 ```bash
-docker compose exec api alembic upgrade head
+curl http://localhost:8000/health
 ```
 
-Check the current migration revision:
-
-```bash
-docker compose exec api alembic current
-```
-
-Create a new migration after model changes:
-
-```bash
-docker compose exec api alembic revision --autogenerate -m "describe change"
-```
-
-## Elasticsearch Setup
-
-Create the Elasticsearch ticket index:
-
-```bash
-docker compose exec api python -m app.search.setup
-```
-
-Reindex tickets from PostgreSQL into Elasticsearch:
-
-```bash
-docker compose exec api python -m app.search.reindex
-```
-
-The reindex flow exists because Elasticsearch is treated as a rebuildable projection, not as the primary database.
-
-## Smoke Tests
-
-Run the ticket API smoke script:
-
-```bash
-bash scripts/verify_ticket_api.sh
-```
-
-Run the end-to-end outbox-backed search smoke script:
-
-```bash
-bash scripts/verify_search_flow.sh
-```
-
-The search smoke script verifies the main search flow from outside the application:
-
-* the API is reachable;
-* Elasticsearch is reachable from the API container;
-* the Elasticsearch index exists;
-* a ticket can be created through the API;
-* the created ticket is synced into the search projection through the outbox processor;
-* the ticket can be found through the search endpoint;
-* the ticket can be updated through the API;
-* the updated ticket is synced through the outbox processor;
-* the updated ticket can be found through the search endpoint;
-* the ticket can be deleted through the API;
-* the delete event is processed through the outbox processor;
-* the deleted ticket is removed from the search projection.
-
-By default, smoke scripts target:
-
-```text
-http://localhost:8001
-```
-
-You can override the target API URL when needed:
-
-```bash
-BASE_URL=http://localhost:8000 bash scripts/verify_search_flow.sh
-```
-
-## Testing
+## Tests
 
 Run the test suite:
 
@@ -386,105 +236,49 @@ Run the test suite:
 pytest -q
 ```
 
-Current test coverage focuses on:
+The tests are focused on unit/API behavior and do not require a live Elasticsearch instance.
 
-* ticket CRUD API behavior;
-* service/repository boundaries;
-* Unit of Work transaction boundary;
-* ticket + outbox event creation in the same transaction;
-* rollback behavior when outbox event creation fails;
-* request validation;
-* filtering and pagination;
-* Elasticsearch mapping;
-* Elasticsearch document conversion;
-* Elasticsearch query building;
-* search API behavior with fake search clients;
-* controlled search backend failure handling;
-* outbox event lifecycle;
-* outbox processor behavior;
-* failed event retry behavior;
-* stuck `processing` event recovery;
-* reindex behavior.
+Coverage includes:
 
-The fast test suite is designed to run without a live PostgreSQL or Elasticsearch service.
+- ticket API behavior and validation
+- database filtering and pagination
+- outbox event creation, claiming, retry scheduling, and stuck processing recovery
+- Elasticsearch mapping, query building, indexing, and delete behavior
+- reindexing from PostgreSQL
+- search API forwarding and error handling
+- request id middleware, search health states, and JSON log formatting
 
-## CI
+Run the Docker-based smoke flow after the stack is up:
 
-GitHub Actions runs two validation jobs on pushes to `main` and on pull requests.
+```bash
+scripts/verify_search_flow.sh
+```
 
-The `tests` job installs dependencies and runs the fast pytest suite.
+## Repository Structure
 
-The `docker-smoke` job runs after `tests`, starts the Docker Compose stack, executes the search smoke flow, prints Docker logs on failure, and tears the stack down.
-
-This keeps fast feedback separate from the heavier end-to-end check.
-
-## Design Decisions
-
-### PostgreSQL is the source of truth
-
-Ticket data is stored and updated in PostgreSQL. Elasticsearch is not treated as the primary database.
-
-### Elasticsearch is a search projection
-
-Search documents are derived from ticket records. If Elasticsearch becomes stale, the index can be rebuilt from PostgreSQL.
-
-### Ticket writes create durable outbox events
-
-Ticket create/update/delete operations create outbox events in the same PostgreSQL transaction as the ticket change.
-
-This avoids the failure gap where the database write succeeds but the external search sync fails without a durable retry signal.
-
-### Service layer does not know Elasticsearch indexing details
-
-`TicketService` coordinates the application use case and writes outbox events. It does not create Elasticsearch clients, build Elasticsearch documents, or call indexing functions directly.
-
-Search projection synchronization belongs to the outbox processor.
-
-### Repositories do not commit transactions
-
-Repositories add, update, delete, and query objects, but they do not commit transactions.
-
-The Unit of Work owns commit, rollback, and refresh behavior for use cases that involve multiple repositories.
-
-### Search failures are explicit
-
-The search API treats Elasticsearch failures as search subsystem failures. If Elasticsearch is unavailable, `/tickets/search` returns `503 Service Unavailable` instead of returning a misleading empty result set.
-
-The search layer translates backend-specific failures into an internal `SearchUnavailableError`, and the API layer maps that error to an HTTP response.
-
-### Query building is isolated
-
-Elasticsearch query construction lives in a separate module so search behavior can be tested without running Elasticsearch.
-
-### Reindexing is explicit
-
-The project includes a reindex command to rebuild the search projection from PostgreSQL. This makes the source-of-truth boundary visible and recoverable.
-
-### Fast tests and smoke tests are separated
-
-Fast tests run with pytest and focus on unit/API behavior. Smoke tests run against the Docker Compose stack and verify the main runtime flow.
-
-## Out of Scope
-
-This project does not currently include:
-
-* authentication or authorization;
-* Redis/Celery-based async workers;
-* multi-worker outbox locking;
-* production-grade distributed outbox processing;
-* advanced observability;
-* production Elasticsearch cluster configuration;
-* cloud deployment;
-* semantic or hybrid search.
+```text
+app/
+  api/              FastAPI routers
+  core/             configuration, logging, request context
+  db/               SQLAlchemy base and session
+  models/           SQLAlchemy models
+  repositories/     database access layer
+  schemas/          Pydantic request/response models
+  search/           Elasticsearch client, mapping, query, indexer, reindex
+  services/         ticket use cases and outbox processing
+alembic/            database migrations
+docs/               architecture, design decisions, operations, roadmap
+scripts/            local verification scripts
+tests/              pytest suite
+```
 
 ## Roadmap
 
-Planned next steps:
+See [docs/roadmap.md](docs/roadmap.md) for the full roadmap.
 
-* add structured logging and lightweight observability;
-* add request IDs and better operational logs around outbox processing;
-* add Redis/Celery for async worker execution;
-* add multi-worker-safe outbox claiming;
-* add PostgreSQL full-text search comparison;
-* add semantic or hybrid search with embeddings;
-* add Persian search quality improvements.
+Nearest follow-up areas:
+
+- wire the outbox processor as a Docker Compose worker service
+- add authentication and authorization
+- improve search quality with analyzers, highlighting, and suggestions
+
