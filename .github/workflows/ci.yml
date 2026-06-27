@@ -43,8 +43,10 @@ jobs:
 
       - name: Build and start Docker stack
         run: docker compose up --build -d
-
+        
       - name: Run search smoke flow
+        env:
+          API_READY_TIMEOUT_SECONDS: "120"
         run: bash scripts/verify_search_flow.sh
 
       - name: Show Docker logs on failure
