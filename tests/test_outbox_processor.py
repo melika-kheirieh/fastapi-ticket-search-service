@@ -6,7 +6,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.db.base import Base
 from app.models.outbox_event import OutboxEvent
-from app.outbox.processor import OutboxProcessor
+from app.outbox.processor import OutboxProcessor, get_retry_delay_seconds
 from app.repositories.outbox_event_repository import OutboxEventRepository
 from app.schemas.ticket import TicketCreateRequest
 from app.services.ticket_service import TicketService
@@ -31,6 +31,14 @@ def utc_now_naive() -> datetime:
 
 class FakeSearchClient:
     pass
+
+
+def test_get_retry_delay_seconds_caps_at_last_backoff_value():
+    assert get_retry_delay_seconds(1) == 30
+    assert get_retry_delay_seconds(2) == 120
+    assert get_retry_delay_seconds(3) == 300
+    assert get_retry_delay_seconds(4) == 900
+    assert get_retry_delay_seconds(5) == 900
 
 
 def test_processor_indexes_created_ticket_event(db_session, monkeypatch):
@@ -182,6 +190,8 @@ def test_processor_marks_event_failed_when_indexing_fails(db_session, monkeypatc
     assert event.retry_count == 1
     assert event.last_error == "Elasticsearch is down"
     assert event.processed_at is None
+    assert event.next_attempt_at is not None
+    assert event.next_attempt_at >= utc_now_naive() + timedelta(seconds=25)
 
 
 def test_processor_marks_unknown_event_type_failed(db_session):

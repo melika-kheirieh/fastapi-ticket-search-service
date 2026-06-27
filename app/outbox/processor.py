@@ -8,6 +8,15 @@ from app.search.client import create_elasticsearch_client
 from app.search.documents import ticket_to_search_document
 from app.search.indexer import delete_ticket_document, index_ticket_document
 
+RETRY_BACKOFF_SECONDS = (30, 120, 300, 900)
+
+
+def get_retry_delay_seconds(retry_count: int) -> int:
+    retry_index = max(retry_count - 1, 0)
+    return RETRY_BACKOFF_SECONDS[
+        min(retry_index, len(RETRY_BACKOFF_SECONDS) - 1)
+    ]
+
 
 @dataclass
 class OutboxProcessingResult:
@@ -27,11 +36,13 @@ class OutboxProcessor:
         max_retry_count: int = 3,
         processing_timeout_seconds: int = 300,
     ) -> OutboxProcessingResult:
-        events = self.uow.outbox_events.get_processable_events(
+        events = self.uow.outbox_events.claim_processable_events(
             limit=limit,
             max_retry_count=max_retry_count,
             processing_timeout_seconds=processing_timeout_seconds,
         )
+        self.uow.commit()
+
         result = OutboxProcessingResult()
 
         for event in events:
@@ -45,13 +56,15 @@ class OutboxProcessor:
         return result
 
     def _process_one_event(self, event: OutboxEvent) -> bool:
-        self.uow.outbox_events.mark_processing(event)
-        self.uow.commit()
-
         try:
             self._sync_event(event)
         except Exception as exc:
-            self.uow.outbox_events.mark_failed(event, error=exc)
+            retry_delay_seconds = get_retry_delay_seconds(event.retry_count + 1)
+            self.uow.outbox_events.mark_failed(
+                event,
+                error=exc,
+                retry_delay_seconds=retry_delay_seconds,
+            )
             self.uow.commit()
             return False
 
