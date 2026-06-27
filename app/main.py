@@ -77,5 +77,8 @@ def search_health_check(search_client=Depends(get_elasticsearch_client)):
     status_code = 200 if status["status"] == "ok" else 503
     return JSONResponse(status_code=status_code, content=status)
 
+@app.get("/health")
+def health_check():
+    return {"status": "ok"}
 
 app.include_router(tickets_router)
