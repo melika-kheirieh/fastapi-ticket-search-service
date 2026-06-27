@@ -1,8 +1,7 @@
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_
 
 from app.models.outbox_event import OutboxEvent
 
@@ -25,9 +24,7 @@ class OutboxEventRepository:
             event_type=event_type,
             payload=payload if payload is not None else {},
         )
-
         self.db.add(event)
-
         return event
 
     def get_pending_events(self, *, limit: int = 100) -> list[OutboxEvent]:
@@ -39,22 +36,62 @@ class OutboxEventRepository:
         )
 
         result = self.db.execute(stmt)
-
         return list(result.scalars().all())
-    
+
     def get_processable_events(
         self,
         limit: int = 20,
         max_retry_count: int = 3,
         processing_timeout_seconds: int = 300,
     ) -> list[OutboxEvent]:
+        stmt = self._build_processable_events_stmt(
+            limit=limit,
+            max_retry_count=max_retry_count,
+            processing_timeout_seconds=processing_timeout_seconds,
+            lock_rows=False,
+        )
+
+        result = self.db.execute(stmt)
+        return list(result.scalars().all())
+
+    def claim_processable_events(
+        self,
+        limit: int = 20,
+        max_retry_count: int = 3,
+        processing_timeout_seconds: int = 300,
+    ) -> list[OutboxEvent]:
+        stmt = self._build_processable_events_stmt(
+            limit=limit,
+            max_retry_count=max_retry_count,
+            processing_timeout_seconds=processing_timeout_seconds,
+            lock_rows=True,
+        )
+
+        result = self.db.execute(stmt)
+        events = list(result.scalars().all())
+
+        for event in events:
+            event.status = "processing"
+            event.processed_at = None
+
+        self.db.flush()
+        return events
+
+    def _build_processable_events_stmt(
+        self,
+        *,
+        limit: int,
+        max_retry_count: int,
+        processing_timeout_seconds: int,
+        lock_rows: bool,
+    ):
         processing_deadline = datetime.now(timezone.utc) - timedelta(
             seconds=processing_timeout_seconds
         )
 
-        return (
-            self.db.query(OutboxEvent)
-            .filter(
+        stmt = (
+            select(OutboxEvent)
+            .where(
                 or_(
                     OutboxEvent.status == "pending",
                     and_(
@@ -68,15 +105,18 @@ class OutboxEventRepository:
                     ),
                 )
             )
-            .order_by(OutboxEvent.created_at, OutboxEvent.id)
+            .order_by(OutboxEvent.created_at.asc(), OutboxEvent.id.asc())
             .limit(limit)
-            .all()
         )
+
+        if lock_rows:
+            stmt = stmt.with_for_update(skip_locked=True)
+
+        return stmt
 
     def mark_processing(self, event: OutboxEvent) -> OutboxEvent:
         event.status = "processing"
         self.db.flush()
-
         return event
 
     def mark_processed(self, event: OutboxEvent) -> OutboxEvent:
@@ -84,7 +124,6 @@ class OutboxEventRepository:
         event.processed_at = datetime.now(timezone.utc)
         event.last_error = None
         self.db.flush()
-
         return event
 
     def mark_failed(
@@ -97,5 +136,4 @@ class OutboxEventRepository:
         event.retry_count += 1
         event.last_error = str(error)
         self.db.flush()
-
         return event

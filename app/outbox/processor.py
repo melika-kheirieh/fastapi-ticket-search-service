@@ -27,11 +27,13 @@ class OutboxProcessor:
         max_retry_count: int = 3,
         processing_timeout_seconds: int = 300,
     ) -> OutboxProcessingResult:
-        events = self.uow.outbox_events.get_processable_events(
+        events = self.uow.outbox_events.claim_processable_events(
             limit=limit,
             max_retry_count=max_retry_count,
             processing_timeout_seconds=processing_timeout_seconds,
         )
+        self.uow.commit()
+
         result = OutboxProcessingResult()
 
         for event in events:
@@ -45,9 +47,6 @@ class OutboxProcessor:
         return result
 
     def _process_one_event(self, event: OutboxEvent) -> bool:
-        self.uow.outbox_events.mark_processing(event)
-        self.uow.commit()
-
         try:
             self._sync_event(event)
         except Exception as exc:

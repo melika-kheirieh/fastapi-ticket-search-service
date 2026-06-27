@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.dialects import postgresql
 
 from app.db.base import Base
 from app.models.outbox_event import OutboxEvent
@@ -252,3 +253,60 @@ def test_outbox_event_repository_marks_event_failed(db_session):
     assert event.retry_count == 1
     assert event.last_error == "Elasticsearch is down"
     assert event.processed_at is None
+
+def test_outbox_event_repository_claims_processable_events(db_session):
+    repository = OutboxEventRepository(db_session)
+
+    first = repository.add_event(
+        aggregate_type="ticket",
+        aggregate_id=1,
+        event_type="ticket.created",
+    )
+    second = repository.add_event(
+        aggregate_type="ticket",
+        aggregate_id=2,
+        event_type="ticket.updated",
+    )
+    processed = repository.add_event(
+        aggregate_type="ticket",
+        aggregate_id=3,
+        event_type="ticket.created",
+    )
+    db_session.commit()
+
+    repository.mark_processed(processed)
+    db_session.commit()
+
+    claimed_events = repository.claim_processable_events(
+        limit=10,
+        max_retry_count=3,
+        processing_timeout_seconds=300,
+    )
+    db_session.commit()
+
+    assert [event.id for event in claimed_events] == [first.id, second.id]
+
+    db_session.refresh(first)
+    db_session.refresh(second)
+    db_session.refresh(processed)
+
+    assert first.status == "processing"
+    assert second.status == "processing"
+    assert processed.status == "processed"
+
+
+def test_outbox_event_repository_claim_query_uses_skip_locked_for_postgresql(
+    db_session,
+):
+    repository = OutboxEventRepository(db_session)
+
+    stmt = repository._build_processable_events_stmt(
+        limit=10,
+        max_retry_count=3,
+        processing_timeout_seconds=300,
+        lock_rows=True,
+    )
+
+    compiled_sql = str(stmt.compile(dialect=postgresql.dialect()))
+
+    assert "FOR UPDATE SKIP LOCKED" in compiled_sql
