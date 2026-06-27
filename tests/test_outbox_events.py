@@ -49,6 +49,7 @@ def test_can_store_outbox_event(db_session):
     assert saved_event.retry_count == 0
     assert saved_event.last_error is None
     assert saved_event.processed_at is None
+    assert saved_event.next_attempt_at is None
     assert saved_event.created_at is not None
     assert saved_event.updated_at is not None
 
@@ -253,6 +254,96 @@ def test_outbox_event_repository_marks_event_failed(db_session):
     assert event.retry_count == 1
     assert event.last_error == "Elasticsearch is down"
     assert event.processed_at is None
+    assert event.next_attempt_at is None
+
+
+def test_outbox_event_repository_mark_failed_sets_next_attempt_at(db_session):
+    repository = OutboxEventRepository(db_session)
+
+    event = repository.add_event(
+        aggregate_type="ticket",
+        aggregate_id=123,
+        event_type="ticket.created",
+    )
+    db_session.commit()
+
+    earliest_retry_at = utc_now_naive() + timedelta(seconds=59)
+
+    repository.mark_failed(
+        event,
+        error=RuntimeError("Elasticsearch is down"),
+        retry_delay_seconds=60,
+    )
+    db_session.commit()
+    db_session.refresh(event)
+
+    assert event.status == "failed"
+    assert event.retry_count == 1
+    assert event.next_attempt_at is not None
+    assert event.next_attempt_at >= earliest_retry_at
+
+
+def test_outbox_event_repository_does_not_claim_failed_event_before_next_attempt(
+    db_session,
+):
+    repository = OutboxEventRepository(db_session)
+
+    event = repository.add_event(
+        aggregate_type="ticket",
+        aggregate_id=123,
+        event_type="ticket.created",
+    )
+    db_session.commit()
+
+    repository.mark_failed(
+        event,
+        error=RuntimeError("Elasticsearch is down"),
+        retry_delay_seconds=60,
+    )
+    db_session.commit()
+
+    claimed_events = repository.claim_processable_events(
+        limit=10,
+        max_retry_count=3,
+        processing_timeout_seconds=300,
+    )
+
+    assert claimed_events == []
+
+
+def test_outbox_event_repository_claims_failed_event_after_next_attempt(
+    db_session,
+):
+    repository = OutboxEventRepository(db_session)
+
+    event = repository.add_event(
+        aggregate_type="ticket",
+        aggregate_id=123,
+        event_type="ticket.created",
+    )
+    db_session.commit()
+
+    repository.mark_failed(
+        event,
+        error=RuntimeError("Elasticsearch is down"),
+        retry_delay_seconds=60,
+    )
+    db_session.commit()
+
+    event.next_attempt_at = utc_now_naive() - timedelta(seconds=1)
+    db_session.commit()
+
+    claimed_events = repository.claim_processable_events(
+        limit=10,
+        max_retry_count=3,
+        processing_timeout_seconds=300,
+    )
+    db_session.commit()
+    db_session.refresh(event)
+
+    assert [claimed_event.id for claimed_event in claimed_events] == [event.id]
+    assert event.status == "processing"
+    assert event.next_attempt_at is None
 
 def test_outbox_event_repository_claims_processable_events(db_session):
     repository = OutboxEventRepository(db_session)

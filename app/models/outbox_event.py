@@ -44,6 +44,7 @@ class OutboxEvent(Base):
 
     last_error = Column(Text, nullable=True)
     processed_at = Column(DateTime(timezone=True), nullable=True)
+    next_attempt_at = Column(DateTime(timezone=True), nullable=True, index=True)
 
     created_at = Column(
         DateTime(timezone=True),

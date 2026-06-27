@@ -73,6 +73,7 @@ class OutboxEventRepository:
         for event in events:
             event.status = "processing"
             event.processed_at = None
+            event.next_attempt_at = None
 
         self.db.flush()
         return events
@@ -85,23 +86,28 @@ class OutboxEventRepository:
         processing_timeout_seconds: int,
         lock_rows: bool,
     ):
-        processing_deadline = datetime.now(timezone.utc) - timedelta(
-            seconds=processing_timeout_seconds
-        )
+        now = datetime.now(timezone.utc)
+        processing_deadline = now - timedelta(seconds=processing_timeout_seconds)
 
         stmt = (
             select(OutboxEvent)
             .where(
-                or_(
-                    OutboxEvent.status == "pending",
-                    and_(
-                        OutboxEvent.status == "failed",
-                        OutboxEvent.retry_count < max_retry_count,
+                and_(
+                    or_(
+                        OutboxEvent.next_attempt_at.is_(None),
+                        OutboxEvent.next_attempt_at <= now,
                     ),
-                    and_(
-                        OutboxEvent.status == "processing",
-                        OutboxEvent.retry_count < max_retry_count,
-                        OutboxEvent.updated_at < processing_deadline,
+                    or_(
+                        OutboxEvent.status == "pending",
+                        and_(
+                            OutboxEvent.status == "failed",
+                            OutboxEvent.retry_count < max_retry_count,
+                        ),
+                        and_(
+                            OutboxEvent.status == "processing",
+                            OutboxEvent.retry_count < max_retry_count,
+                            OutboxEvent.updated_at < processing_deadline,
+                        ),
                     ),
                 )
             )
@@ -123,6 +129,7 @@ class OutboxEventRepository:
         event.status = "processed"
         event.processed_at = datetime.now(timezone.utc)
         event.last_error = None
+        event.next_attempt_at = None
         self.db.flush()
         return event
 
@@ -131,9 +138,17 @@ class OutboxEventRepository:
         event: OutboxEvent,
         *,
         error: Exception,
+        retry_delay_seconds: int | None = None,
     ) -> OutboxEvent:
         event.status = "failed"
         event.retry_count += 1
         event.last_error = str(error)
+        event.next_attempt_at = None
+
+        if retry_delay_seconds is not None:
+            event.next_attempt_at = datetime.now(timezone.utc) + timedelta(
+                seconds=retry_delay_seconds
+            )
+
         self.db.flush()
         return event
