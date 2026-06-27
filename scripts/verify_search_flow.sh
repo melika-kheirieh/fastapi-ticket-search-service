@@ -2,7 +2,9 @@
 set -euo pipefail
 
 BASE_URL="${BASE_URL:-http://localhost:8001}"
+ELASTICSEARCH_URL="${ELASTICSEARCH_URL:-http://localhost:9200}"
 API_READY_TIMEOUT_SECONDS="${API_READY_TIMEOUT_SECONDS:-120}"
+ELASTICSEARCH_READY_TIMEOUT_SECONDS="${ELASTICSEARCH_READY_TIMEOUT_SECONDS:-120}"
 MARKER="smoke-$(date +%s)"
 
 require_command() {
@@ -31,14 +33,25 @@ show_docker_diagnostics() {
 
   echo
   echo "Recent elasticsearch logs:"
-  docker compose logs --no-color --tail=80 elasticsearch || true
+  docker compose logs --no-color --tail=120 elasticsearch || true
+
+  echo
+  echo "Recent worker logs:"
+  docker compose logs --no-color --tail=80 worker || true
+
+  echo
+  echo "Recent beat logs:"
+  docker compose logs --no-color --tail=80 beat || true
 }
 
-wait_for_api() {
+wait_for_http() {
+  local name="$1"
+  local url="$2"
+  local timeout_seconds="$3"
   local elapsed=0
 
-  while [ "$elapsed" -lt "$API_READY_TIMEOUT_SECONDS" ]; do
-    if curl -fsS "$BASE_URL/health" >/dev/null; then
+  while [ "$elapsed" -lt "$timeout_seconds" ]; do
+    if curl -fsS "$url" >/dev/null; then
       return 0
     fi
 
@@ -46,7 +59,7 @@ wait_for_api() {
     elapsed=$((elapsed + 2))
   done
 
-  echo "API did not become ready at $BASE_URL after ${API_READY_TIMEOUT_SECONDS}s" >&2
+  echo "$name did not become ready at $url after ${timeout_seconds}s" >&2
   show_docker_diagnostics
   exit 1
 }
@@ -56,7 +69,10 @@ require_command docker
 require_command python3
 
 echo "Checking API health at $BASE_URL"
-wait_for_api
+wait_for_http "API" "$BASE_URL/health" "$API_READY_TIMEOUT_SECONDS"
+
+echo "Checking Elasticsearch health at $ELASTICSEARCH_URL"
+wait_for_http "Elasticsearch" "$ELASTICSEARCH_URL" "$ELASTICSEARCH_READY_TIMEOUT_SECONDS"
 
 echo "Ensuring Elasticsearch index exists"
 docker compose exec -T api python -m app.search.setup >/dev/null
