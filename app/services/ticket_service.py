@@ -1,8 +1,13 @@
+import logging
+
 from sqlalchemy.orm import Session
 
 from app.db.unit_of_work import UnitOfWork
 from app.models.ticket import Ticket
 from app.schemas.ticket import TicketCreateRequest, TicketUpdateRequest
+
+
+logger = logging.getLogger(__name__)
 
 
 class TicketService:
@@ -22,8 +27,9 @@ class TicketService:
 
         try:
             self.uow.tickets.add(ticket)
+            self.uow.flush()
 
-            self.uow.outbox_events.add_event(
+            outbox_event = self.uow.outbox_events.add_event(
                 aggregate_type="ticket",
                 aggregate_id=ticket.id,
                 event_type="ticket.created",
@@ -33,11 +39,20 @@ class TicketService:
             self.uow.commit()
             self.uow.refresh(ticket)
 
-            return ticket
-
         except Exception:
             self.uow.rollback()
             raise
+
+        logger.info(
+            "Ticket created",
+            extra={
+                "event": "ticket_created",
+                "ticket_id": ticket.id,
+                "outbox_event_id": outbox_event.id,
+            },
+        )
+
+        return ticket
 
     def list_tickets(
         self,
@@ -78,7 +93,7 @@ class TicketService:
         try:
             self.uow.tickets.update(ticket)
 
-            self.uow.outbox_events.add_event(
+            outbox_event = self.uow.outbox_events.add_event(
                 aggregate_type="ticket",
                 aggregate_id=ticket.id,
                 event_type="ticket.updated",
@@ -88,11 +103,20 @@ class TicketService:
             self.uow.commit()
             self.uow.refresh(ticket)
 
-            return ticket
-
         except Exception:
             self.uow.rollback()
             raise
+
+        logger.info(
+            "Ticket updated",
+            extra={
+                "event": "ticket_updated",
+                "ticket_id": ticket.id,
+                "outbox_event_id": outbox_event.id,
+            },
+        )
+
+        return ticket
 
     def delete_ticket(self, ticket_id: int) -> bool:
         ticket = self.uow.tickets.get_by_id(ticket_id)
@@ -105,7 +129,7 @@ class TicketService:
         try:
             self.uow.tickets.delete(ticket)
 
-            self.uow.outbox_events.add_event(
+            outbox_event = self.uow.outbox_events.add_event(
                 aggregate_type="ticket",
                 aggregate_id=ticket_id_to_delete,
                 event_type="ticket.deleted",
@@ -114,8 +138,17 @@ class TicketService:
 
             self.uow.commit()
 
-            return True
-
         except Exception:
             self.uow.rollback()
             raise
+
+        logger.info(
+            "Ticket deleted",
+            extra={
+                "event": "ticket_deleted",
+                "ticket_id": ticket_id_to_delete,
+                "outbox_event_id": outbox_event.id,
+            },
+        )
+
+        return True

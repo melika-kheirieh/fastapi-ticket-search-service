@@ -4,6 +4,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     app_name: str = "FastAPI Ticket Search Service"
     environment: str = "local"
+    log_level: str = "INFO"
     database_url: str = (
         "postgresql+psycopg://ticket_user:ticket_password@localhost:5432/ticket_db"
     )
