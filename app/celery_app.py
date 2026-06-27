@@ -18,3 +18,10 @@ celery_app.conf.update(
     timezone="UTC",
     enable_utc=True,
 )
+
+celery_app.conf.beat_schedule = {
+    "process-outbox-batch-every-10-seconds": {
+        "task": "process_outbox_batch",
+        "schedule": 10.0,
+    },
+}
