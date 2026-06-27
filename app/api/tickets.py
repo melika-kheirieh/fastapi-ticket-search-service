@@ -1,4 +1,3 @@
-import logging
 from datetime import datetime
 
 from fastapi import (
@@ -23,8 +22,6 @@ from app.search.exceptions import SearchUnavailableError
 from app.search.queries import search_tickets as search_ticket_documents
 from app.services.ticket_service import TicketService
 
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tickets", tags=["Tickets"])
 
@@ -93,20 +90,6 @@ def search_tickets(
             offset=offset,
         )
     except SearchUnavailableError as exc:
-        logger.exception(
-            "Ticket search unavailable",
-            extra={
-                "event": "ticket_search_unavailable",
-                "query_length": len(q) if q else 0,
-                "status": status,
-                "priority": priority,
-                "category": category,
-                "tag": tag,
-                "user_id": user_id,
-                "limit": limit,
-                "offset": offset,
-            },
-        )
         raise HTTPException(
             status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Search is temporarily unavailable",

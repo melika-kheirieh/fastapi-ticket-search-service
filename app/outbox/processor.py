@@ -1,4 +1,3 @@
-import logging
 from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
@@ -8,9 +7,6 @@ from app.models.outbox_event import OutboxEvent
 from app.search.client import create_elasticsearch_client
 from app.search.documents import ticket_to_search_document
 from app.search.indexer import delete_ticket_document, index_ticket_document
-
-
-logger = logging.getLogger(__name__)
 
 RETRY_BACKOFF_SECONDS = (30, 120, 300, 900)
 
@@ -47,15 +43,6 @@ class OutboxProcessor:
         )
         self.uow.commit()
 
-        logger.info(
-            "Outbox events claimed",
-            extra={
-                "event": "outbox_events_claimed",
-                "claimed_count": len(events),
-                "limit": limit,
-            },
-        )
-
         result = OutboxProcessingResult()
 
         for event in events:
@@ -66,72 +53,23 @@ class OutboxProcessor:
             else:
                 result.failed += 1
 
-        logger.info(
-            "Outbox batch processed",
-            extra={
-                "event": "outbox_batch_processed",
-                "processed": result.processed,
-                "failed": result.failed,
-                "skipped": result.skipped,
-            },
-        )
-
         return result
 
     def _process_one_event(self, event: OutboxEvent) -> bool:
-        logger.info(
-            "Outbox event processing started",
-            extra={
-                "event": "outbox_event_processing_started",
-                "outbox_event_id": event.id,
-                "event_type": event.event_type,
-                "aggregate_type": event.aggregate_type,
-                "aggregate_id": event.aggregate_id,
-                "retry_count": event.retry_count,
-            },
-        )
-
         try:
             self._sync_event(event)
         except Exception as exc:
             retry_delay_seconds = get_retry_delay_seconds(event.retry_count + 1)
-
             self.uow.outbox_events.mark_failed(
                 event,
                 error=exc,
                 retry_delay_seconds=retry_delay_seconds,
             )
             self.uow.commit()
-
-            logger.exception(
-                "Outbox event processing failed",
-                extra={
-                    "event": "outbox_event_processing_failed",
-                    "outbox_event_id": event.id,
-                    "event_type": event.event_type,
-                    "aggregate_type": event.aggregate_type,
-                    "aggregate_id": event.aggregate_id,
-                    "retry_count": event.retry_count,
-                    "retry_delay_seconds": retry_delay_seconds,
-                },
-            )
-
             return False
 
         self.uow.outbox_events.mark_processed(event)
         self.uow.commit()
-
-        logger.info(
-            "Outbox event processed",
-            extra={
-                "event": "outbox_event_processed",
-                "outbox_event_id": event.id,
-                "event_type": event.event_type,
-                "aggregate_type": event.aggregate_type,
-                "aggregate_id": event.aggregate_id,
-            },
-        )
-
         return True
 
     def _sync_event(self, event: OutboxEvent) -> None:

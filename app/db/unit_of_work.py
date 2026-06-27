@@ -20,6 +20,3 @@ class UnitOfWork:
 
     def refresh(self, obj: Any) -> None:
         self.db.refresh(obj)
-
-    def flush(self) -> None:
-        self.db.flush()
