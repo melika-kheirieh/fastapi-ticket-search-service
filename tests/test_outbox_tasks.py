@@ -17,10 +17,12 @@ class FakeOutboxProcessor:
     def __init__(self, db):
         self.db = db
         self.process_events_called = False
+        self.process_events_kwargs = None
         FakeOutboxProcessor.instances.append(self)
 
-    def process_events(self):
+    def process_events(self, **kwargs):
         self.process_events_called = True
+        self.process_events_kwargs = kwargs
         return SimpleNamespace(
             processed=2,
             failed=1,
@@ -45,4 +47,9 @@ def test_process_outbox_batch_runs_processor_and_closes_session(monkeypatch):
     assert len(FakeOutboxProcessor.instances) == 1
     assert FakeOutboxProcessor.instances[0].db is session
     assert FakeOutboxProcessor.instances[0].process_events_called is True
+    assert FakeOutboxProcessor.instances[0].process_events_kwargs == {
+        "limit": outbox.settings.outbox_batch_size,
+        "max_retry_count": outbox.settings.outbox_max_retry_count,
+        "processing_timeout_seconds": outbox.settings.outbox_processing_timeout_seconds,
+    }
     assert session.closed is True

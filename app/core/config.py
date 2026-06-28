@@ -13,6 +13,11 @@ class Settings(BaseSettings):
     celery_broker_url: str = "redis://localhost:6379/0"
     celery_result_backend: str = "redis://localhost:6379/1"
 
+    outbox_batch_size: int = 20
+    outbox_max_retry_count: int = 3
+    outbox_processing_timeout_seconds: int = 300
+    outbox_beat_schedule_seconds: float = 10.0
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
