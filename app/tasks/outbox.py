@@ -9,6 +9,11 @@ def process_outbox_batch() -> dict:
 
     try:
         processor = OutboxProcessor(db)
-        return processor.process_events()
+        result = processor.process_events()
+        return {
+            "processed": result.processed,
+            "failed": result.failed,
+            "skipped": result.skipped,
+        }
     finally:
         db.close()

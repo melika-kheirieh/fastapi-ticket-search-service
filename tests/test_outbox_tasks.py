@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from app.tasks import outbox
 
 
@@ -19,13 +21,15 @@ class FakeOutboxProcessor:
 
     def process_events(self):
         self.process_events_called = True
-        return {
-            "processed": 2,
-            "failed": 1,
-        }
+        return SimpleNamespace(
+            processed=2,
+            failed=1,
+            skipped=0,
+        )
 
 
 def test_process_outbox_batch_runs_processor_and_closes_session(monkeypatch):
+    FakeOutboxProcessor.instances = []
     session = FakeSession()
 
     monkeypatch.setattr(outbox, "SessionLocal", lambda: session)
@@ -36,6 +40,7 @@ def test_process_outbox_batch_runs_processor_and_closes_session(monkeypatch):
     assert result == {
         "processed": 2,
         "failed": 1,
+        "skipped": 0,
     }
     assert len(FakeOutboxProcessor.instances) == 1
     assert FakeOutboxProcessor.instances[0].db is session
