@@ -5,6 +5,7 @@ BASE_URL="${BASE_URL:-http://localhost:8001}"
 ELASTICSEARCH_URL="${ELASTICSEARCH_URL:-http://localhost:9200}"
 API_READY_TIMEOUT_SECONDS="${API_READY_TIMEOUT_SECONDS:-120}"
 ELASTICSEARCH_READY_TIMEOUT_SECONDS="${ELASTICSEARCH_READY_TIMEOUT_SECONDS:-120}"
+OUTBOX_READY_TIMEOUT_SECONDS="${OUTBOX_READY_TIMEOUT_SECONDS:-60}"
 MARKER="smoke-$(date +%s)"
 
 require_command() {
@@ -37,11 +38,11 @@ show_docker_diagnostics() {
 
   echo
   echo "Recent worker logs:"
-  docker compose logs --no-color --tail=80 worker || true
+  docker compose logs --no-color --tail=120 worker || true
 
   echo
   echo "Recent beat logs:"
-  docker compose logs --no-color --tail=80 beat || true
+  docker compose logs --no-color --tail=120 beat || true
 }
 
 wait_for_http() {
@@ -60,6 +61,41 @@ wait_for_http() {
   done
 
   echo "$name did not become ready at $url after ${timeout_seconds}s" >&2
+  show_docker_diagnostics
+  exit 1
+}
+
+wait_for_outbox_processed() {
+  local ticket_id="$1"
+  local elapsed=0
+  local status=""
+
+  echo "Waiting for outbox event to be processed for ticket id $ticket_id"
+
+  while [ "$elapsed" -lt "$OUTBOX_READY_TIMEOUT_SECONDS" ]; do
+    status="$(
+      docker compose exec -T postgres psql \
+        -U ticket_user \
+        -d ticket_db \
+        -tAc "select status from outbox_events where aggregate_type = 'ticket' and aggregate_id = ${ticket_id} and event_type = 'ticket.created' order by id desc limit 1;"
+    )"
+
+    if [ "$status" = "processed" ]; then
+      echo "Outbox event processed for ticket id $ticket_id"
+      return 0
+    fi
+
+    if [ "$status" = "failed" ]; then
+      echo "Outbox event failed for ticket id $ticket_id" >&2
+      show_docker_diagnostics
+      exit 1
+    fi
+
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+
+  echo "Outbox event for ticket id $ticket_id did not become processed; last status: ${status:-missing}" >&2
   show_docker_diagnostics
   exit 1
 }
@@ -97,8 +133,7 @@ ticket_id="$(
     | python3 -c 'import json, sys; print(json.load(sys.stdin)["id"])'
 )"
 
-echo "Reindexing tickets into Elasticsearch"
-docker compose exec -T api python -m app.search.reindex >/dev/null
+wait_for_outbox_processed "$ticket_id"
 
 echo "Searching for smoke ticket through Elasticsearch"
 for _ in $(seq 1 20); do
