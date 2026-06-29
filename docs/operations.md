@@ -30,6 +30,12 @@ Run the API:
 uvicorn app.main:app --reload
 ```
 
+Run one local outbox-processing batch:
+
+```bash
+python -m app.outbox.cli
+```
+
 Run tests:
 
 ```bash
@@ -50,10 +56,27 @@ View containers:
 docker compose ps -a
 ```
 
+The Compose stack includes:
+
+- PostgreSQL
+- Redis
+- Elasticsearch
+- Alembic migration container
+- API
+- Celery worker
+- Celery beat scheduler
+
 Follow API logs:
 
 ```bash
 docker compose logs -f api
+```
+
+Follow worker and beat logs:
+
+```bash
+docker compose logs -f worker
+docker compose logs -f beat
 ```
 
 Stop the stack:
@@ -118,11 +141,23 @@ Expected search health meanings:
 
 ## Smoke Verification
 
-After the stack is running, run:
+After the stack is running, create the Elasticsearch index:
+
+```bash
+docker compose exec api python -m app.search.setup
+```
+
+Then run:
 
 ```bash
 scripts/verify_search_flow.sh
 ```
+
+The expected flow is:
+
+1. Create a ticket through the API.
+2. Let the Celery worker sync the outbox event to Elasticsearch.
+3. Search for the created ticket through `/tickets/search`.
 
 The default API base URL is:
 
@@ -136,14 +171,6 @@ Override it when needed:
 BASE_URL=http://localhost:8000 scripts/verify_search_flow.sh
 ```
 
-The smoke script verifies the create-to-search path at a higher level than the unit tests:
-
-- wait for the API health endpoint
-- ensure the Elasticsearch ticket index exists
-- create a ticket through the API
-- search for that ticket through the Elasticsearch-backed endpoint
-- delete the smoke-test ticket
-
 ## Logs
 
 Logs are formatted as JSON and include structured fields such as:
@@ -156,6 +183,9 @@ Logs are formatted as JSON and include structured fields such as:
 - `duration_ms`
 - `ticket_id`
 - `outbox_event_id`
+- `claimed`
+- `processed`
+- `failed`
 
 When debugging a request, start with the response `X-Request-ID` and search for the same `request_id` in logs.
 
@@ -164,6 +194,7 @@ When debugging a request, start with the response `X-Request-ID` and search for 
 | Symptom | Likely cause | Command |
 | --- | --- | --- |
 | `/health` works but `/health/search` returns `degraded` | Ticket index is missing | `docker compose exec api python -m app.search.setup` |
-| Search endpoint returns no newly created tickets | Projection has not been synced | `docker compose exec api python -m app.search.reindex` |
-| Local data is confusing or stale | Docker volumes contain old state | `docker compose down -v` |
+| Search does not show a newly created ticket yet | The outbox event has not been processed | Check `docker compose logs -f worker` |
+| Search projection looks stale | Elasticsearch projection is behind PostgreSQL | `docker compose exec api python -m app.search.reindex` |
+| Local data is confusing or stale | Docker volumes contain old PostgreSQL or Elasticsearch state | `docker compose down -v` |
 | API is not reachable on port `8000` | Docker exposes the API on `8001` | Use `http://localhost:8001` |

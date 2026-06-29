@@ -6,8 +6,6 @@ This service is built around one boundary:
 
 The API never treats Elasticsearch as the system of record. Search can be temporarily stale, unavailable, or rebuilt without losing ticket data.
 
-See [design-decisions.md](design-decisions.md) for the tradeoffs behind the major choices.
-
 ## Runtime Boundaries
 
 | Boundary | Responsibility |
@@ -16,6 +14,9 @@ See [design-decisions.md](design-decisions.md) for the tradeoffs behind the majo
 | Service layer | Ticket use cases and transaction-level orchestration |
 | Repositories | PostgreSQL reads and writes |
 | PostgreSQL | Durable ticket data and durable outbox events |
+| Redis | Celery broker and result backend for scheduled outbox processing |
+| Celery beat | Schedules periodic outbox-processing tasks |
+| Celery worker | Runs outbox-processing tasks |
 | Outbox processor | Converts ticket events into Elasticsearch index/delete operations |
 | Elasticsearch | Full-text and filter-heavy search projection |
 | Reindex command | Rebuilds Elasticsearch from PostgreSQL |
@@ -37,14 +38,16 @@ This means the application does not need Elasticsearch to be healthy in order to
 
 ## Incremental Search Sync
 
-The outbox processor handles projection updates after the write transaction exists in PostgreSQL.
+Celery beat schedules outbox-processing batches, and the Celery worker runs them after the write transaction exists in PostgreSQL.
 
 ```mermaid
 flowchart TD
-    A["Claim ready outbox events"] --> B["Load ticket when needed"]
-    B --> C["Index or delete document"]
-    C --> D["Mark processed"]
-    C --> E["Mark failed with retry metadata"]
+    A["Celery beat"] --> B["process_outbox_batch task"]
+    B --> C["Celery worker"]
+    C --> D["Claim ready events"]
+    D --> E["Index or delete document"]
+    E --> F["Mark processed"]
+    E --> G["Mark failed with retry metadata"]
 ```
 
 The processor stores retry state in PostgreSQL:
@@ -104,17 +107,15 @@ This separation prevents a search outage from being confused with a total API ou
 | Failure | Expected behavior | Recovery path |
 | --- | --- | --- |
 | Elasticsearch is down during a ticket write | The PostgreSQL write can still succeed | The outbox event remains durable and can be retried |
-| Outbox processing fails | The event is marked `failed` with retry metadata | Retry after `next_attempt_at` |
-| Elasticsearch index is missing | `/health/search` reports a non-OK state | Run `python -m app.search.setup` |
+| Outbox processing fails | The event is marked `failed` with retry metadata | Retry after `next_attempt_at` until the retry limit is reached |
+| Elasticsearch index is missing | `/health/search` reports a degraded state | Run `python -m app.search.setup` |
 | Search projection is stale or corrupted | PostgreSQL remains authoritative | Run `python -m app.search.reindex` |
-| API process is alive but search is unavailable | `/health` stays separate from `/health/search` | Diagnose search dependency without masking API liveness |
-
-The system favors explicit recovery over pretending the two stores are always perfectly synchronized.
+| API is alive but search is unavailable | `/health` and `/health/search` report different states | Diagnose the search dependency without masking API liveness |
 
 ## Consistency Model
 
-The write side is strongly consistent inside PostgreSQL: ticket rows and outbox events are committed in the same transaction.
+Ticket writes are strongly consistent inside PostgreSQL: the ticket row and outbox event are committed in the same transaction.
 
-The search side is eventually consistent: Elasticsearch may lag behind PostgreSQL until the outbox processor syncs events or a reindex rebuilds the projection.
+Search is eventually consistent: Elasticsearch can lag behind PostgreSQL until the worker processes ready outbox events, or until a full reindex rebuilds the projection.
 
-This is an intentional tradeoff. It keeps the ticket write path durable and avoids coupling user-facing writes to Elasticsearch availability.
+That tradeoff is intentional. It keeps ticket writes independent from Elasticsearch availability while still preserving the intent to update search.
