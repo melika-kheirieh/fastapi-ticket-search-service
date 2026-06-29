@@ -66,7 +66,7 @@ The current scope stays focused on backend reliability and search projection cor
 
 The diagram below summarizes the main runtime flow: PostgreSQL keeps durable ticket state, Celery and Redis process outbox batches asynchronously, and Elasticsearch remains a rebuildable search projection.
 
-![Ticket Search Service architecture](docs/assets/ticket-search-service-architecture.png)
+![Ticket Search Service architecture](docs/assets/architecture-overview.png)
 
 Ticket writes commit the ticket row and the outbox event in the same PostgreSQL transaction:
 
