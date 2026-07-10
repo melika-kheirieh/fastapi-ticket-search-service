@@ -65,6 +65,16 @@ wait_for_http() {
   exit 1
 }
 
+assert_metrics_contains() {
+  local metric_name="$1"
+
+  if ! curl -fsS "$BASE_URL/metrics" | grep -q "$metric_name"; then
+    echo "Metrics endpoint does not expose expected metric: $metric_name" >&2
+    show_docker_diagnostics
+    exit 1
+  fi
+}
+
 wait_for_outbox_processed() {
   local ticket_id="$1"
   local elapsed=0
@@ -103,9 +113,20 @@ wait_for_outbox_processed() {
 require_command curl
 require_command docker
 require_command python3
+require_command grep
 
 echo "Checking API health at $BASE_URL"
 wait_for_http "API" "$BASE_URL/health" "$API_READY_TIMEOUT_SECONDS"
+
+echo "Checking metrics endpoint at $BASE_URL/metrics"
+wait_for_http "Metrics endpoint" "$BASE_URL/metrics" "$API_READY_TIMEOUT_SECONDS"
+
+echo "Checking HTTP metrics output"
+assert_metrics_contains "http_requests_total"
+assert_metrics_contains "http_request_duration_seconds"
+
+echo "Checking outbox metrics output"
+assert_metrics_contains "outbox_events_by_status"
 
 echo "Checking Elasticsearch health at $ELASTICSEARCH_URL"
 wait_for_http "Elasticsearch" "$ELASTICSEARCH_URL" "$ELASTICSEARCH_READY_TIMEOUT_SECONDS"
@@ -160,6 +181,11 @@ if not any(
     raise SystemExit(1)
 ' "$ticket_id" "$MARKER"; then
     echo "Search smoke flow passed for ticket id $ticket_id"
+
+    echo "Checking search metrics output"
+    assert_metrics_contains "search_requests_total"
+    assert_metrics_contains "search_request_duration_seconds"
+
     exit 0
   fi
 
