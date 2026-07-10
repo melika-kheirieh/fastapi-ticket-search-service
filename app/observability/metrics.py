@@ -1,5 +1,8 @@
 from fastapi import Response
-from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
+
+
+OUTBOX_EVENT_STATUSES = ("pending", "processing", "processed", "failed")
 
 
 HTTP_REQUESTS_TOTAL = Counter(
@@ -28,6 +31,12 @@ SEARCH_UNAVAILABLE_TOTAL = Counter(
 SEARCH_REQUEST_DURATION_SECONDS = Histogram(
     "search_request_duration_seconds",
     "Ticket search request duration in seconds.",
+    ["status"],
+)
+
+OUTBOX_EVENTS_BY_STATUS = Gauge(
+    "outbox_events_by_status",
+    "Current number of outbox events grouped by status.",
     ["status"],
 )
 
@@ -65,6 +74,13 @@ def record_search_request(
 
 def record_search_unavailable() -> None:
     SEARCH_UNAVAILABLE_TOTAL.inc()
+
+
+def update_outbox_events_by_status(counts_by_status: dict[str, int]) -> None:
+    for status in OUTBOX_EVENT_STATUSES:
+        OUTBOX_EVENTS_BY_STATUS.labels(status=status).set(
+            counts_by_status.get(status, 0)
+        )
 
 
 def metrics_response() -> Response:

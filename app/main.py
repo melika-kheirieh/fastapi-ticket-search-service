@@ -4,12 +4,19 @@ from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
+from sqlalchemy.orm import Session
 
 from app.api.tickets import router as tickets_router
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.core.request_context import reset_request_id, set_request_id
-from app.observability.metrics import metrics_response, record_http_request
+from app.db.session import get_db
+from app.observability.metrics import (
+    metrics_response,
+    record_http_request,
+    update_outbox_events_by_status,
+)
+from app.repositories.outbox_event_repository import OutboxEventRepository
 from app.search.dependencies import get_elasticsearch_client
 from app.search.health import get_search_subsystem_status
 
@@ -108,7 +115,11 @@ def health_check():
 
 
 @app.get("/metrics", include_in_schema=False)
-def metrics():
+def metrics(db: Session = Depends(get_db)):
+    repository = OutboxEventRepository(db)
+    counts_by_status = repository.count_by_status()
+    update_outbox_events_by_status(counts_by_status)
+
     return metrics_response()
 
 

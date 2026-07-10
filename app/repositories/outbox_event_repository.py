@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.outbox_event import OutboxEvent
@@ -37,6 +37,19 @@ class OutboxEventRepository:
 
         result = self.db.execute(stmt)
         return list(result.scalars().all())
+
+    def count_by_status(self) -> dict[str, int]:
+        stmt = select(
+            OutboxEvent.status,
+            func.count(OutboxEvent.id),
+        ).group_by(OutboxEvent.status)
+
+        result = self.db.execute(stmt)
+
+        return {
+            status: count
+            for status, count in result.all()
+        }
 
     def get_processable_events(
         self,

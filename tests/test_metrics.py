@@ -1,5 +1,7 @@
+import pytest
 from fastapi.testclient import TestClient
 
+from app.db.session import get_db
 from app.main import app
 from app.search.dependencies import get_elasticsearch_client
 from app.search.exceptions import SearchUnavailableError
@@ -29,7 +31,34 @@ class FakeSearchClient:
         }
 
 
-def test_metrics_endpoint_returns_prometheus_output():
+class FakeOutboxCountResult:
+    def all(self):
+        return [
+            ("pending", 2),
+            ("processing", 1),
+            ("processed", 5),
+            ("failed", 0),
+        ]
+
+
+class FakeOutboxDbSession:
+    def execute(self, stmt):
+        return FakeOutboxCountResult()
+
+
+@pytest.fixture(autouse=True)
+def clear_dependency_overrides():
+    app.dependency_overrides.clear()
+    yield
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def metrics_db_override():
+    app.dependency_overrides[get_db] = lambda: FakeOutboxDbSession()
+
+
+def test_metrics_endpoint_returns_prometheus_output(metrics_db_override):
     client = TestClient(app)
 
     client.get("/health")
@@ -41,35 +70,33 @@ def test_metrics_endpoint_returns_prometheus_output():
     assert "http_request_duration_seconds" in response.text
 
 
-def test_http_metrics_use_route_template_not_raw_path():
+def test_http_metrics_use_route_template_not_raw_path(metrics_db_override):
     client = TestClient(app)
 
+    client.get("/metrics")
     response = client.get("/metrics")
 
     assert response.status_code == 200
     assert 'route="/metrics"' in response.text
 
 
-def test_search_success_metrics_are_recorded():
+def test_search_success_metrics_are_recorded(metrics_db_override):
     app.dependency_overrides[get_elasticsearch_client] = lambda: FakeSearchClient()
 
-    try:
-        client = TestClient(app)
+    client = TestClient(app)
 
-        search_response = client.get("/tickets/search?q=payment")
-        assert search_response.status_code == 200
+    search_response = client.get("/tickets/search?q=payment")
+    assert search_response.status_code == 200
 
-        metrics_response = client.get("/metrics")
-        assert metrics_response.status_code == 200
-        assert "search_requests_total" in metrics_response.text
-        assert 'search_requests_total{status="success"}' in metrics_response.text
-        assert "search_request_duration_seconds" in metrics_response.text
-        assert 'search_request_duration_seconds_count{status="success"}' in metrics_response.text
-    finally:
-        app.dependency_overrides.clear()
+    metrics_response = client.get("/metrics")
+    assert metrics_response.status_code == 200
+    assert "search_requests_total" in metrics_response.text
+    assert 'search_requests_total{status="success"}' in metrics_response.text
+    assert "search_request_duration_seconds" in metrics_response.text
+    assert 'search_request_duration_seconds_count{status="success"}' in metrics_response.text
 
 
-def test_search_unavailable_metrics_are_recorded(monkeypatch):
+def test_search_unavailable_metrics_are_recorded(metrics_db_override, monkeypatch):
     def fake_search_ticket_documents(**kwargs):
         raise SearchUnavailableError("Search backend is unavailable")
 
@@ -88,3 +115,16 @@ def test_search_unavailable_metrics_are_recorded(monkeypatch):
     assert "search_unavailable_total" in metrics_response.text
     assert 'search_requests_total{status="unavailable"}' in metrics_response.text
     assert 'search_request_duration_seconds_count{status="unavailable"}' in metrics_response.text
+
+
+def test_metrics_endpoint_exposes_outbox_status_gauge(metrics_db_override):
+    client = TestClient(app)
+
+    response = client.get("/metrics")
+
+    assert response.status_code == 200
+    assert "outbox_events_by_status" in response.text
+    assert 'outbox_events_by_status{status="pending"} 2.0' in response.text
+    assert 'outbox_events_by_status{status="processing"} 1.0' in response.text
+    assert 'outbox_events_by_status{status="processed"} 5.0' in response.text
+    assert 'outbox_events_by_status{status="failed"} 0.0' in response.text
