@@ -8,3 +8,4 @@ httpx
 alembic
 elasticsearch>=8.14,<9
 celery[redis]
+prometheus-client

@@ -7,8 +7,9 @@ from fastapi.responses import JSONResponse
 
 from app.api.tickets import router as tickets_router
 from app.core.config import settings
-from app.core.request_context import reset_request_id, set_request_id
 from app.core.logging import configure_logging
+from app.core.request_context import reset_request_id, set_request_id
+from app.observability.metrics import metrics_response, record_http_request
 from app.search.dependencies import get_elasticsearch_client
 from app.search.health import get_search_subsystem_status
 
@@ -20,6 +21,11 @@ app = FastAPI(
     version="0.1.0",
     description="A PostgreSQL-backed ticket service with Elasticsearch search projection.",
 )
+
+
+def _get_route_path(request: Request) -> str:
+    route = request.scope.get("route")
+    return getattr(route, "path", request.url.path)
 
 
 @app.middleware("http")
@@ -40,7 +46,16 @@ async def add_request_id(request: Request, call_next):
     try:
         response = await call_next(request)
     except Exception:
-        duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+        duration_seconds = time.perf_counter() - started_at
+        duration_ms = round(duration_seconds * 1000, 2)
+
+        record_http_request(
+            method=request.method,
+            route=_get_route_path(request),
+            status_code=500,
+            duration_seconds=duration_seconds,
+        )
+
         logger.exception(
             "Request failed",
             extra={
@@ -52,7 +67,16 @@ async def add_request_id(request: Request, call_next):
         )
         raise
     else:
-        duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+        duration_seconds = time.perf_counter() - started_at
+        duration_ms = round(duration_seconds * 1000, 2)
+
+        record_http_request(
+            method=request.method,
+            route=_get_route_path(request),
+            status_code=response.status_code,
+            duration_seconds=duration_seconds,
+        )
+
         response.headers["X-Request-ID"] = request_id
 
         logger.info(
@@ -77,8 +101,15 @@ def search_health_check(search_client=Depends(get_elasticsearch_client)):
     status_code = 200 if status["status"] == "ok" else 503
     return JSONResponse(status_code=status_code, content=status)
 
+
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
+
+
+@app.get("/metrics", include_in_schema=False)
+def metrics():
+    return metrics_response()
+
 
 app.include_router(tickets_router)
