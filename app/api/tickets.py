@@ -1,4 +1,5 @@
 import logging
+import time
 from datetime import datetime
 
 from fastapi import (
@@ -13,6 +14,7 @@ from fastapi import (
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.observability.metrics import record_search_request, record_search_unavailable
 from app.schemas.ticket import (
     TicketCreateRequest,
     TicketResponse,
@@ -78,8 +80,10 @@ def search_tickets(
     offset: int = Query(default=0, ge=0),
     search_client=Depends(get_elasticsearch_client),
 ):
+    started_at = time.perf_counter()
+
     try:
-        return search_ticket_documents(
+        results = search_ticket_documents(
             client=search_client,
             query=q,
             status=status,
@@ -93,6 +97,14 @@ def search_tickets(
             offset=offset,
         )
     except SearchUnavailableError as exc:
+        duration_seconds = time.perf_counter() - started_at
+
+        record_search_request(
+            status="unavailable",
+            duration_seconds=duration_seconds,
+        )
+        record_search_unavailable()
+
         logger.exception(
             "Ticket search unavailable",
             extra={
@@ -111,6 +123,15 @@ def search_tickets(
             status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Search is temporarily unavailable",
         ) from exc
+
+    duration_seconds = time.perf_counter() - started_at
+
+    record_search_request(
+        status="success",
+        duration_seconds=duration_seconds,
+    )
+
+    return results
 
 
 @router.get("/{ticket_id}", response_model=TicketResponse)

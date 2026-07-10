@@ -14,6 +14,23 @@ HTTP_REQUEST_DURATION_SECONDS = Histogram(
     ["method", "route", "status"],
 )
 
+SEARCH_REQUESTS_TOTAL = Counter(
+    "search_requests_total",
+    "Total number of ticket search requests.",
+    ["status"],
+)
+
+SEARCH_UNAVAILABLE_TOTAL = Counter(
+    "search_unavailable_total",
+    "Total number of ticket search requests that failed because search was unavailable.",
+)
+
+SEARCH_REQUEST_DURATION_SECONDS = Histogram(
+    "search_request_duration_seconds",
+    "Ticket search request duration in seconds.",
+    ["status"],
+)
+
 
 def record_http_request(
     *,
@@ -35,6 +52,19 @@ def record_http_request(
         route=route,
         status=status,
     ).observe(duration_seconds)
+
+
+def record_search_request(
+    *,
+    status: str,
+    duration_seconds: float,
+) -> None:
+    SEARCH_REQUESTS_TOTAL.labels(status=status).inc()
+    SEARCH_REQUEST_DURATION_SECONDS.labels(status=status).observe(duration_seconds)
+
+
+def record_search_unavailable() -> None:
+    SEARCH_UNAVAILABLE_TOTAL.inc()
 
 
 def metrics_response() -> Response:
