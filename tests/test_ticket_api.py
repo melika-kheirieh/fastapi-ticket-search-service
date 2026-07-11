@@ -70,6 +70,7 @@ def test_create_ticket_returns_created_ticket(monkeypatch):
     client = TestClient(app)
     response = client.post(
         "/tickets",
+        headers=USER_HEADERS,
         json={
             "user_id": 7,
             "title": "Payment failed",
@@ -85,6 +86,70 @@ def test_create_ticket_returns_created_ticket(monkeypatch):
     assert response.json()["title"] == "Payment failed"
     assert calls["payload"].user_id == 7
     assert calls["payload"].tags == ["payment", "checkout"]
+
+
+def test_create_ticket_rejects_regular_user_creating_for_another_user(monkeypatch):
+    class FakeTicketService:
+        def __init__(self, db):
+            pass
+
+        def create_ticket(self, payload):
+            raise AssertionError("TicketService should not be called")
+
+    monkeypatch.setattr("app.api.tickets.TicketService", FakeTicketService)
+
+    client = TestClient(app)
+    response = client.post(
+        "/tickets",
+        headers=USER_HEADERS,
+        json={
+            "user_id": 8,
+            "title": "Payment failed",
+            "description": "Payment was not captured",
+            "status": "open",
+            "priority": "high",
+            "category": "billing",
+            "tags": ["payment", "checkout"],
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json() == {
+        "detail": "Not allowed to create ticket for another user",
+    }
+
+
+def test_create_ticket_allows_admin_to_create_for_another_user(monkeypatch):
+    calls = {}
+
+    class FakeTicketService:
+        def __init__(self, db):
+            pass
+
+        def create_ticket(self, payload):
+            calls["payload"] = payload
+            return ticket_response(user_id=payload.user_id)
+
+    monkeypatch.setattr("app.api.tickets.TicketService", FakeTicketService)
+
+    client = TestClient(app)
+    response = client.post(
+        "/tickets",
+        headers=ADMIN_HEADERS,
+        json={
+            "user_id": 8,
+            "title": "Payment failed",
+            "description": "Payment was not captured",
+            "status": "open",
+            "priority": "high",
+            "category": "billing",
+            "tags": ["payment", "checkout"],
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["user_id"] == 8
+    assert calls["payload"].user_id == 8
 
 
 def test_list_tickets_for_regular_user_forces_current_user_filter(monkeypatch):
@@ -297,12 +362,98 @@ def test_get_ticket_allows_admin_to_read_ticket_owned_by_another_user(monkeypatc
     assert response.json()["user_id"] == 8
 
 
+def test_update_ticket_updates_ticket_for_owner(monkeypatch):
+    calls = {}
+
+    class FakeTicketService:
+        def __init__(self, db):
+            pass
+
+        def get_ticket_by_id(self, ticket_id):
+            return ticket_response(id=ticket_id, user_id=7)
+
+        def update_ticket(self, ticket_id, payload):
+            calls["ticket_id"] = ticket_id
+            calls["payload"] = payload
+            return ticket_response(id=ticket_id, user_id=7, status=payload.status)
+
+    monkeypatch.setattr("app.api.tickets.TicketService", FakeTicketService)
+
+    client = TestClient(app)
+    response = client.patch(
+        "/tickets/1",
+        headers=USER_HEADERS,
+        json={"status": "closed"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "closed"
+    assert calls["ticket_id"] == 1
+    assert calls["payload"].status == "closed"
+
+
+def test_update_ticket_returns_not_found_for_ticket_owned_by_another_user(monkeypatch):
+    class FakeTicketService:
+        def __init__(self, db):
+            pass
+
+        def get_ticket_by_id(self, ticket_id):
+            return ticket_response(id=ticket_id, user_id=8)
+
+        def update_ticket(self, ticket_id, payload):
+            raise AssertionError("update_ticket should not be called")
+
+    monkeypatch.setattr("app.api.tickets.TicketService", FakeTicketService)
+
+    client = TestClient(app)
+    response = client.patch(
+        "/tickets/1",
+        headers=USER_HEADERS,
+        json={"status": "closed"},
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Ticket not found"}
+
+
+def test_update_ticket_allows_admin_to_update_ticket_owned_by_another_user(monkeypatch):
+    calls = {}
+
+    class FakeTicketService:
+        def __init__(self, db):
+            pass
+
+        def get_ticket_by_id(self, ticket_id):
+            return ticket_response(id=ticket_id, user_id=8)
+
+        def update_ticket(self, ticket_id, payload):
+            calls["ticket_id"] = ticket_id
+            return ticket_response(id=ticket_id, user_id=8, status=payload.status)
+
+    monkeypatch.setattr("app.api.tickets.TicketService", FakeTicketService)
+
+    client = TestClient(app)
+    response = client.patch(
+        "/tickets/1",
+        headers=ADMIN_HEADERS,
+        json={"status": "closed"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["user_id"] == 8
+    assert response.json()["status"] == "closed"
+    assert calls["ticket_id"] == 1
+
+
 def test_delete_ticket_returns_no_content(monkeypatch):
     calls = {}
 
     class FakeTicketService:
         def __init__(self, db):
             pass
+
+        def get_ticket_by_id(self, ticket_id):
+            return ticket_response(id=ticket_id, user_id=7)
 
         def delete_ticket(self, ticket_id):
             calls["ticket_id"] = ticket_id
@@ -311,7 +462,60 @@ def test_delete_ticket_returns_no_content(monkeypatch):
     monkeypatch.setattr("app.api.tickets.TicketService", FakeTicketService)
 
     client = TestClient(app)
-    response = client.delete("/tickets/1")
+    response = client.delete(
+        "/tickets/1",
+        headers=USER_HEADERS,
+    )
+
+    assert response.status_code == 204
+    assert response.content == b""
+    assert calls["ticket_id"] == 1
+
+
+def test_delete_ticket_returns_not_found_for_ticket_owned_by_another_user(monkeypatch):
+    class FakeTicketService:
+        def __init__(self, db):
+            pass
+
+        def get_ticket_by_id(self, ticket_id):
+            return ticket_response(id=ticket_id, user_id=8)
+
+        def delete_ticket(self, ticket_id):
+            raise AssertionError("delete_ticket should not be called")
+
+    monkeypatch.setattr("app.api.tickets.TicketService", FakeTicketService)
+
+    client = TestClient(app)
+    response = client.delete(
+        "/tickets/1",
+        headers=USER_HEADERS,
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Ticket not found"}
+
+
+def test_delete_ticket_allows_admin_to_delete_ticket_owned_by_another_user(monkeypatch):
+    calls = {}
+
+    class FakeTicketService:
+        def __init__(self, db):
+            pass
+
+        def get_ticket_by_id(self, ticket_id):
+            return ticket_response(id=ticket_id, user_id=8)
+
+        def delete_ticket(self, ticket_id):
+            calls["ticket_id"] = ticket_id
+            return True
+
+    monkeypatch.setattr("app.api.tickets.TicketService", FakeTicketService)
+
+    client = TestClient(app)
+    response = client.delete(
+        "/tickets/1",
+        headers=ADMIN_HEADERS,
+    )
 
     assert response.status_code == 204
     assert response.content == b""

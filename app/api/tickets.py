@@ -50,6 +50,21 @@ def _resolve_visible_user_id(
     return current_user.user_id
 
 
+def _ensure_create_user_id_is_allowed(
+    *,
+    current_user: CurrentUser,
+    requested_user_id: int,
+) -> None:
+    if current_user.is_admin:
+        return
+
+    if requested_user_id != current_user.user_id:
+        raise HTTPException(
+            status_code=http_status.HTTP_403_FORBIDDEN,
+            detail="Not allowed to create ticket for another user",
+        )
+
+
 def _get_ticket_user_id(ticket) -> int:
     if isinstance(ticket, dict):
         return ticket["user_id"]
@@ -80,7 +95,13 @@ def _ensure_ticket_is_visible(
 def create_ticket(
     payload: TicketCreateRequest,
     db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
+    _ensure_create_user_id_is_allowed(
+        current_user=current_user,
+        requested_user_id=payload.user_id,
+    )
+
     service = TicketService(db)
     return service.create_ticket(payload)
 
@@ -216,8 +237,22 @@ def update_ticket(
     payload: TicketUpdateRequest,
     ticket_id: int = Path(..., gt=0),
     db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
     service = TicketService(db)
+    existing_ticket = service.get_ticket_by_id(ticket_id)
+
+    if existing_ticket is None:
+        raise HTTPException(
+            status_code=http_status.HTTP_404_NOT_FOUND,
+            detail="Ticket not found",
+        )
+
+    _ensure_ticket_is_visible(
+        ticket=existing_ticket,
+        current_user=current_user,
+    )
+
     ticket = service.update_ticket(ticket_id, payload)
 
     if ticket is None:
@@ -237,8 +272,22 @@ def update_ticket(
 def delete_ticket(
     ticket_id: int = Path(..., gt=0),
     db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(get_current_user),
 ) -> Response:
     service = TicketService(db)
+    existing_ticket = service.get_ticket_by_id(ticket_id)
+
+    if existing_ticket is None:
+        raise HTTPException(
+            status_code=http_status.HTTP_404_NOT_FOUND,
+            detail="Ticket not found",
+        )
+
+    _ensure_ticket_is_visible(
+        ticket=existing_ticket,
+        current_user=current_user,
+    )
+
     deleted = service.delete_ticket(ticket_id)
 
     if not deleted:
