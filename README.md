@@ -14,7 +14,7 @@ The core design rule is intentionally simple:
 
 **PostgreSQL is the durable source of truth. Elasticsearch is a rebuildable, query-optimized search projection.**
 
-The service treats search as a rebuildable projection instead of coupling ticket writes directly to Elasticsearch. It shows API design, persistence, migrations, search mapping, query construction, outbox-based indexing, reindexing, structured logging, health checks, tests, and Docker Compose verification.
+The service treats search as a rebuildable projection instead of coupling ticket writes directly to Elasticsearch. It shows API design, persistence, migrations, ownership authorization, search mapping and query construction, outbox-based indexing, reindexing, observability, tests, and Docker Compose verification.
 
 ## What This Project Shows
 
@@ -26,19 +26,23 @@ The service treats search as a rebuildable projection instead of coupling ticket
 - Retryable outbox processor with failure metadata
 - Celery worker and beat scheduler for scheduled outbox processing, backed by Redis
 - Reindex command for rebuilding Elasticsearch from PostgreSQL
-- Request id middleware and structured JSON logs
-- Health checks for API liveness and search readiness
-- Docker Compose stack with PostgreSQL, Redis, Elasticsearch, migrations, API, Celery worker, and Celery beat services
-- pytest tests for API behavior, search query construction, indexing, reindexing, outbox events, Celery task behavior, and observability
+- Header-based current-user context with `user` and `admin` roles
+- Ownership authorization across create, list, get, update, delete, and search, including prevention of cross-user exposure through Elasticsearch
+- Request ID middleware, structured JSON logs for the API process, and Prometheus-compatible HTTP, search, and outbox metrics
+- Health checks for API liveness and Elasticsearch reachability
+- Docker Compose stack with PostgreSQL, Redis, Elasticsearch, migrations, and non-root API, Celery worker, and Celery beat services
+- `.env.example` with local configuration defaults
+- Docker smoke verification for runtime users, metrics, outbox processing, authenticated API access, and search
+- pytest coverage across API behavior, authentication context, authorization, search, indexing, outbox processing, Celery tasks, metrics, and observability
 - GitHub Actions CI
 
 ## Quick Review Path
 
 | Start here | What it explains |
 | --- | --- |
-| [docs/architecture.md](docs/architecture.md) | Source-of-truth boundary, outbox sync, search projection, and recovery model |
-| [docs/operations.md](docs/operations.md) | Docker Compose startup, index setup, smoke verification, health checks, and logs |
-| [docs/roadmap.md](docs/roadmap.md) | Completed work, next areas, and intentionally deferred scope |
+| [docs/architecture.md](docs/architecture.md) | Runtime boundaries, authorization, outbox consistency, search projection, metrics, and recovery |
+| [docs/operations.md](docs/operations.md) | Local identity headers, Docker Compose, metrics, smoke verification, troubleshooting, and production boundaries |
+| [docs/roadmap.md](docs/roadmap.md) | Completed reliability work, current hardening, future search phases, and deferred deployment scope |
 
 ## Current Status
 
@@ -49,24 +53,31 @@ The service treats search as a rebuildable projection instead of coupling ticket
 | Search projection | Implemented | Elasticsearch `tickets_v1` mapping, setup command, query builder, and `/tickets/search` endpoint |
 | Sync reliability | Implemented | Transactional outbox events, retry metadata, stuck-processing recovery, and reindex recovery path |
 | Worker runtime | Implemented | Celery worker and Celery beat services using Redis as broker/backend in Docker Compose |
-| Observability | Implemented | Request IDs, structured JSON logs, `/health`, and `/health/search` |
-| Verification | Implemented | Focused pytest suite, GitHub Actions CI, and Docker Compose smoke verification |
+| Authorization | Implemented | Header-derived `user` and `admin` context with ownership enforced across PostgreSQL-backed CRUD/list access and Elasticsearch-backed search |
+| Observability | Implemented | Request IDs, structured JSON logs for the API process, `/health`, `/health/search`, `/metrics`, and Prometheus-compatible HTTP, search, and outbox metrics |
+| Container runtime | Implemented | Application containers run as a non-root `app` user |
+| Verification | Implemented | Focused pytest suite, GitHub Actions CI, and Docker smoke verification covering runtime users, metrics, outbox processing, authenticated API access, and search |
 
 Current intentional exclusions:
 
-- Authentication and authorization
-- Production deployment setup
-- PostgreSQL FTS and Persian analyzer work
-- Semantic or hybrid search
-- A frontend dashboard
+- Production identity provider integration
+- JWT login and refresh-token flow
+- Password-based authentication
+- Production secrets management
+- Kubernetes deployment
+- Prometheus server deployment
+- Alertmanager
+- Grafana dashboards
+- PostgreSQL full-text search
+- Persian analyzer and lexical evaluation
+- Semantic and hybrid search
+- Frontend dashboard
 
-The current scope stays focused on backend reliability and search projection correctness.
+The implemented boundary authorizes a header-derived current user and role. Those headers are a demo authentication mechanism, not a production authentication system; production identity verification and credential flows remain future work.
 
 ## Architecture
 
-The diagram below summarizes the main runtime flow: PostgreSQL keeps durable ticket state, Celery and Redis process outbox batches asynchronously, and Elasticsearch remains a rebuildable search projection.
-
-![Ticket Search Service architecture](docs/assets/architecture-overview.png)
+The diagrams below summarize the main runtime flow: PostgreSQL keeps durable ticket state, Celery and Redis process outbox batches asynchronously, and Elasticsearch remains a rebuildable search projection.
 
 Ticket writes commit the ticket row and the outbox event in the same PostgreSQL transaction:
 
@@ -92,9 +103,11 @@ Search reads from the Elasticsearch projection:
 
 ```mermaid
 flowchart TD
-    A["GET /tickets/search"] --> B["Query builder"]
-    B --> C["Elasticsearch tickets_v1"]
-    C --> D["TicketResponse list"]
+    A["GET /tickets/search"] --> B["Current-user context"]
+    B --> C["Resolve visible user_id"]
+    C --> D["Query builder"]
+    D --> E["Elasticsearch tickets_v1 projection"]
+    E --> F["Authorized results"]
 ```
 
 The projection can be rebuilt at any time from PostgreSQL:
@@ -127,9 +140,11 @@ scripts/verify_search_flow.sh
 
 The smoke script verifies this path:
 
-1. Create a ticket through the API.
-2. Let the Celery worker sync it to Elasticsearch.
-3. Search for the created ticket through `/tickets/search`.
+1. Confirm that the API, worker, and beat run as the non-root `app` user.
+2. Confirm that HTTP and outbox metrics are exposed.
+3. Create a ticket through the API with a current-user header.
+4. Wait for the Celery worker to process its outbox event.
+5. Search for the created ticket with the same current-user header and confirm search metrics.
 
 ## API Endpoints
 
@@ -139,6 +154,14 @@ Health checks:
 GET /health
 GET /health/search
 ```
+
+Operational endpoint:
+
+```http
+GET /metrics
+```
+
+`/metrics` exposes operational instrumentation; it is not part of the ticket business API.
 
 Ticket endpoints:
 
@@ -156,6 +179,7 @@ Create a ticket:
 ```bash
 curl -X POST "http://localhost:8001/tickets" \
   -H "Content-Type: application/json" \
+  -H "X-User-ID: 1" \
   -d '{
     "user_id": 1,
     "title": "Payment failed",
@@ -170,14 +194,36 @@ curl -X POST "http://localhost:8001/tickets" \
 Filter tickets through PostgreSQL:
 
 ```bash
-curl "http://localhost:8001/tickets?status=open&category=billing&limit=10&offset=0"
+curl "http://localhost:8001/tickets?status=open&category=billing&limit=10&offset=0" \
+  -H "X-User-ID: 1"
 ```
 
 Search tickets through Elasticsearch:
 
 ```bash
-curl "http://localhost:8001/tickets/search?q=payment&status=open&tag=checkout&limit=10&offset=0"
+curl "http://localhost:8001/tickets/search?q=payment&status=open&tag=checkout&limit=10&offset=0" \
+  -H "X-User-ID: 1"
 ```
+
+An admin may list tickets across users:
+
+```bash
+curl "http://localhost:8001/tickets?limit=10&offset=0" \
+  -H "X-User-ID: 1" \
+  -H "X-User-Role: admin"
+```
+
+## Authentication and Authorization Boundary
+
+Protected ticket endpoints require `X-User-ID`. `X-User-Role` is optional, defaults to `user`, and supports only `user` and `admin`.
+
+Regular users can create, list, get, update, delete, and search only their own tickets. A regular user who tries to create a ticket whose payload `user_id` belongs to another user receives `403`. An admin can access tickets belonging to any user.
+
+A direct get, update, or delete request for another user's ticket returns `404`, avoiding disclosure of whether that resource exists. A regular user who explicitly requests another user's `user_id` in list or search receives `403`. Missing or invalid authentication context returns `401`.
+
+Elasticsearch search enforces the same ownership boundary as PostgreSQL-backed API access; it is not a path around authorization. The API resolves the visible `user_id` and rejects a forbidden scope before it constructs or executes the Elasticsearch query.
+
+The headers supply demo authentication context; the API uses that context for authorization. They are not a replacement for JWT, OAuth, password authentication, or a production identity provider.
 
 ## Ticket Model
 
@@ -207,6 +253,8 @@ The database-backed list endpoint supports exact filters and pagination:
 | `limit`         | Maximum number of results, from `1` to `100` |
 | `offset`        | Number of rows to skip, starting from `0`    |
 
+Regular users are automatically restricted to their current `user_id`; the API does not trust a regular user's requested ownership scope. A regular user cannot request another user's data. Admins may specify `user_id` to select one owner or omit it to access tickets across users.
+
 ## Elasticsearch Search
 
 The search endpoint supports full-text search plus exact filters:
@@ -224,6 +272,8 @@ The search endpoint supports full-text search plus exact filters:
 | `limit`         | Maximum number of results, from `1` to `100`       |
 | `offset`        | Number of rows to skip, starting from `0`          |
 
+Ownership is resolved before the Elasticsearch query is executed. Regular-user searches always include the current user's identifier, while admin searches may select one user or span multiple users. Elasticsearch cannot bypass the API authorization boundary: search is an eventually consistent projection, but ownership enforcement is required on every query.
+
 The Elasticsearch index is named:
 
 ```text
@@ -236,7 +286,7 @@ Important mapping choices:
 
 | Field         | Elasticsearch type             | Reason                                       |
 | ------------- | ------------------------------ | -------------------------------------------- |
-| `title`       | `text` with `keyword` subfield | Full-text search plus exact/sort-ready value |
+| `title`       | `text`                         | Full-text search                             |
 | `description` | `text`                         | Full-text search                             |
 | `status`      | `keyword`                      | Exact filtering                              |
 | `priority`    | `keyword`                      | Exact filtering                              |
@@ -286,31 +336,58 @@ Rebuild the full search projection from PostgreSQL:
 python -m app.search.reindex
 ```
 
+## Metrics
+
+Prometheus-compatible metrics are exposed at:
+
+```http
+GET /metrics
+```
+
+The endpoint includes:
+
+* `http_requests_total`
+* `http_request_duration_seconds`
+* `search_requests_total`
+* `search_unavailable_total`
+* `search_request_duration_seconds`
+* `outbox_events_by_status`
+
+For matched endpoints, HTTP metrics use the request method, route template, and status. Query strings and explicit identifiers such as `request_id`, `ticket_id`, and `user_id` are not added as metric labels.
+
+The project exposes Prometheus-compatible instrumentation. It does not currently deploy a Prometheus server, Alertmanager, or Grafana.
+
 ## Observability
 
-Every HTTP request gets a request id:
+Every HTTP request gets a request ID:
 
 * incoming `X-Request-ID` is reused when present
 * otherwise the API generates one
 * the response includes `X-Request-ID`
-* structured logs include the active `request_id`
+* API logs emitted during the request include the active `request_id`
 
-Important operational logs use an `event` field:
+The API process configures JSON logging. Application logging calls attach
+operational `event` fields, while Celery controls the worker and beat output
+format:
 
-| Event                       | Meaning                                            |
-| --------------------------- | -------------------------------------------------- |
-| `request_started`           | HTTP request entered the app                       |
-| `request_completed`         | HTTP request completed successfully                |
-| `request_failed`            | HTTP request raised an exception                   |
-| `ticket_created`            | Ticket was created and an outbox event was written |
-| `ticket_updated`            | Ticket was updated and an outbox event was written |
-| `ticket_deleted`            | Ticket was deleted and an outbox event was written |
-| `ticket_search_unavailable` | Search endpoint could not use Elasticsearch        |
-| `ticket_index_failed`       | Outbox processor failed to sync a ticket document  |
-| `outbox_event_processed`    | One outbox event was synced successfully           |
-| `outbox_batch_processed`    | One outbox processing batch completed              |
-| `reindex_completed`         | Full PostgreSQL-to-Elasticsearch reindex finished  |
-| `search_health_failed`      | Search subsystem health check failed unexpectedly  |
+| Event                              | Meaning                                             |
+| ---------------------------------- | --------------------------------------------------- |
+| `request_started`                  | HTTP request entered the API                        |
+| `request_completed`                | HTTP request completed successfully                 |
+| `request_failed`                   | HTTP request raised an exception                    |
+| `ticket_created`                   | Ticket was created and an outbox event was written  |
+| `ticket_updated`                   | Ticket was updated and an outbox event was written  |
+| `ticket_deleted`                   | Ticket was deleted and an outbox event was written  |
+| `ticket_search_unavailable`        | Search endpoint could not use Elasticsearch         |
+| `outbox_events_claimed`            | An outbox batch was claimed for processing           |
+| `outbox_event_processing_started`  | Processing started for one outbox event              |
+| `outbox_event_processing_failed`   | One outbox event failed and received retry metadata  |
+| `outbox_event_processed`           | One outbox event was synchronized successfully       |
+| `outbox_batch_processed`           | One outbox processing batch completed                |
+
+The reindex command reports its completion count to standard output. The search
+health endpoint returns status details in its HTTP response; neither path
+currently emits a dedicated completion/failure event.
 
 Search subsystem status is exposed separately from the basic API health check:
 
@@ -318,7 +395,7 @@ Search subsystem status is exposed separately from the basic API health check:
 curl http://localhost:8001/health/search
 ```
 
-`/health` only checks that the API is alive. `/health/search` checks whether Elasticsearch is reachable and whether the configured ticket index exists.
+`/health` only checks that the API is alive. `/health/search` checks Elasticsearch reachability with a ping; the current implementation does not separately verify that the configured ticket index exists.
 
 ## Local Development
 
@@ -377,6 +454,8 @@ The Compose setup starts:
 * API
 * Celery worker
 * Celery beat scheduler
+
+The API, worker, and beat application containers run as the non-root `app` user.
 
 The API is exposed on:
 
@@ -452,7 +531,7 @@ The migration history currently includes:
 
 ## Configuration
 
-Main environment variables:
+Copy `.env.example` when preparing local environment values. Main environment variables:
 
 | Variable                            | Purpose                                              |
 | ----------------------------------- | ---------------------------------------------------- |
@@ -467,7 +546,7 @@ Main environment variables:
 | `OUTBOX_BATCH_SIZE`                 | Number of outbox events claimed per processing batch |
 | `OUTBOX_MAX_RETRY_COUNT`            | Maximum attempts before an event stops being retried |
 | `OUTBOX_PROCESSING_TIMEOUT_SECONDS` | Age after which `processing` events can be reclaimed |
-| `OUTBOX_BEAT_SCHEDULE_SECONDS`      | Delay between scheduled outbox-processing tasks      |
+| `OUTBOX_BEAT_SCHEDULE_SECONDS`      | Declared schedule setting; the current Celery beat entry remains fixed at 10 seconds |
 
 Docker Compose uses:
 
@@ -489,24 +568,17 @@ pytest -q
 
 The test suite is focused on unit/API behavior and does not require a live Elasticsearch instance.
 
-Current coverage includes:
+At a high level, pytest coverage includes:
 
-* ticket API behavior
-* ticket filtering and pagination
-* outbox events for create, update, and delete
-* outbox claiming, retry scheduling, and stuck processing recovery
-* Celery schedule configuration and outbox task behavior
-* Elasticsearch mapping
-* index creation
-* ticket-to-search document conversion
-* indexing and delete behavior
-* reindexing from PostgreSQL
-* search query construction
-* search execution wrapper
-* search API parameter forwarding and validation
-* request id middleware
-* search health states
-* JSON log formatting
+* ticket API behavior, filtering, pagination, and authentication-context validation
+* regular-user/admin authorization, ownership enforcement, and search authorization
+* `401`, `403`, and ownership-hidden `404` behavior
+* transactional outbox writes, processing, retry scheduling, and stuck-event recovery
+* Elasticsearch mapping, query construction, indexing, deletion, and full reindexing
+* request IDs, search health behavior, and HTTP/search/outbox metrics
+* Celery configuration and task behavior
+
+Separately, the Docker smoke flow verifies non-root runtime, metrics exposure, authenticated ticket creation, outbox processing, and Elasticsearch search.
 
 Run the Docker-based smoke flow after the stack is up:
 
@@ -526,14 +598,18 @@ Override it only when needed:
 BASE_URL=http://localhost:8000 scripts/verify_search_flow.sh
 ```
 
+The smoke flow checks non-root application runtime, metrics, authenticated ticket creation and search, outbox processing, and Elasticsearch projection behavior. Its protected API requests include `X-User-ID`.
+
 ## Repository Structure
 
 ```text
 app/
   api/              FastAPI routers
+  auth/             Current-user context and authorization models
   core/             configuration, logging, request context
   db/               SQLAlchemy base and session
   models/           SQLAlchemy models
+  observability/    Prometheus-compatible metrics
   repositories/     database access layer
   schemas/          Pydantic request/response models
   search/           Elasticsearch client, mapping, query, indexer, reindex
@@ -550,9 +626,20 @@ tests/              pytest suite
 
 See [docs/roadmap.md](docs/roadmap.md) for detailed sequencing and future work.
 
-Next areas include:
+Completed:
 
-* lexical search maturity, PostgreSQL FTS, Persian analyzer work, and evaluation metrics
-* embedding provider boundary, semantic search, hybrid search, and stronger evaluation
-* meaningful JWT authorization and search data-access boundaries
-* production polish and public documentation cleanup
+* Prometheus-compatible instrumentation
+* Header-based current-user context
+* Ownership authorization across the API and search
+* Non-root application runtime
+* Docker smoke verification
+
+Still future work:
+
+* JWT-based authentication
+* Login and password management
+* Production identity provider integration
+* Prometheus deployment, Alertmanager, and Grafana
+* Lexical evaluation and a Persian analyzer
+* Semantic and hybrid search
+* Production deployment hardening

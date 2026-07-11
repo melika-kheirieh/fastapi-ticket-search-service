@@ -1,8 +1,14 @@
 # Roadmap
 
-This roadmap keeps backend reliability first, measurable lexical search next, semantic and hybrid search after that, auth boundaries later, and final production/documentation polish at the end.
+This roadmap keeps reliable persistence and projection first, the outbox runtime
+and application observability next, measurable lexical search before semantic
+or hybrid search, verifiable production authentication after the search
+baseline, and final polish at the end.
 
-The project is currently complete through **Phase 4**.
+The project is complete through **Phase 4** plus the current backend reliability
+and authorization hardening milestone. This is not completion of the
+lexical/semantic search phases, a production deployment, or a complete
+authentication product.
 
 ## Completed
 
@@ -72,10 +78,14 @@ Make search and outbox failures diagnosable.
 
 Completed work:
 
-- Request id middleware
+- Request ID middleware
 - `X-Request-ID` response header
-- Structured JSON logging
-- Operational events for request, ticket, search, outbox, worker, and reindex behavior
+- Structured JSON logging for the FastAPI process
+- Operational events for request, ticket, search, and outbox behavior
+- Reindex command output reporting the number of rebuilt ticket documents
+- Prometheus-compatible HTTP and search counters/histograms
+- PostgreSQL-backed outbox status gauges
+- `/metrics`
 - `/health/search` endpoint
 - Smoke script documentation
 
@@ -95,7 +105,8 @@ Completed work:
 - Celery task for scheduled outbox batch processing
 - Celery worker and beat services in Docker Compose
 - Redis service for Celery broker/result backend
-- Configurable batch size, retry count, processing timeout, and beat schedule
+- Configurable batch size, retry count, and processing timeout, with the current
+  Celery beat schedule fixed at 10 seconds
 - Smoke verification for the API-to-worker-to-Elasticsearch path
 - Unit tests for Celery schedule configuration and outbox task behavior
 
@@ -106,6 +117,35 @@ With Docker Compose, the API, Celery worker, and Celery beat run as separate pro
 Architecture summary:
 
 "Ticket writes commit the ticket row and an outbox event in the same PostgreSQL transaction. A separate Celery worker claims ready outbox events and updates Elasticsearch. If Elasticsearch is down, the event stays in PostgreSQL with retry metadata, so the system does not lose the intent to update the search projection."
+
+### Current Hardening Milestone: Authorization, Runtime, and Verification
+
+Goal:
+
+Harden the existing backend boundary and make its local runtime claims
+repeatable without presenting demo identity as production authentication.
+
+Completed work:
+
+- Header-based current-user dependency using `X-User-ID` and optional
+  `X-User-Role`
+- `user` and `admin` role context
+- Ownership authorization across create, list, get, update, delete, and search
+- Search ownership resolved before Elasticsearch query construction
+- Protection against cross-user search exposure
+- Non-root `app` runtime for API, worker, and beat
+- `.env.example`
+- Hardened Docker smoke verification for runtime users, metrics, outbox
+  processing, authenticated creation, and search
+- GitHub Actions Docker smoke job
+- Test-suite organization and coverage polish
+
+Outcome:
+
+The repository now demonstrates a backend reliability and authorization
+hardening milestone. PostgreSQL remains the durable source of truth,
+Elasticsearch remains an eventually consistent, rebuildable projection, and
+authorization is enforced synchronously across both data paths.
 
 ## Next Steps
 
@@ -159,65 +199,66 @@ Acceptance criteria:
 - Evaluation shows how hybrid search changes quality compared with the lexical baseline.
 - Embedding behavior is covered through the provider boundary and tests.
 
-### Phase 7: Meaningful JWT and API Boundaries
+### Phase 7: Verifiable Production Authentication
 
 Goal:
 
-Make authentication affect domain behavior and search data access, instead of only decoding tokens.
+Replace the demo header-based identity mechanism with verifiable authentication
+while preserving the existing ownership authorization boundary.
 
 Planned work:
 
-- Add a `User` model
-- Add user migrations
-- Add password hashing
-- Add login endpoint and access token
-- Add current-user dependency
-- Add simple `user` and `admin` roles
-- Let normal users access only their own tickets
-- Let admins access all tickets
-- Apply authorization to list, get, create, update, delete, and search
-- Prevent search data leaks across ownership boundaries
-- Test login, invalid tokens, ownership, admin access, and search boundaries
+- Add a persistent `User` model and migrations if local account management is
+  still desired
+- Add password hashing and login if password-based identity is chosen
+- Issue access tokens and add JWT validation
+- Add refresh-token handling
+- Integrate a production identity provider
+- Validate trusted claims and support signing-key rotation
+- Strengthen multi-tenant boundaries beyond the current ownership model
+- Test invalid/expired credentials while retaining ownership, admin, and search
+  boundary coverage
 
 Acceptance criteria:
 
-- JWT changes what the user is allowed to see and mutate.
-- Search respects ownership.
-- A user cannot discover another user's tickets through search.
+- Identity is verifiable rather than accepted directly from caller-supplied
+  headers.
+- JWT/OIDC or trusted-gateway claims feed the existing current-user and
+  authorization boundary.
+- Existing ownership and cross-user search protections remain intact.
 
-### Phase 8: Production Polish and Public Documentation Cleanup
+### Phase 8: Deployment and Operational Hardening
 
 Goal:
 
-Prepare the repository for public review, local demos, and technical walkthroughs without claiming it is a full production platform.
+Prepare the service for deployment-oriented operational work without claiming that the repository is a complete production platform.
 
 Planned work:
 
-- Add `.env.example`
-- Document all environment variables
-- Final README pass with architecture, demo path, features, limitations, and tradeoffs
-- Add focused docs for architecture, operations, API examples, and roadmap
-- Improve OpenAPI tags and descriptions
-- Document major error cases for `401`, `403`, `404`, `422`, and `503`
-- Add production boundaries and honest limitations
+- Improve OpenAPI tags and descriptions where still relevant
 - Check that no real secrets are committed
-- Improve Docker Compose docs
-- Optionally add Docker smoke verification in CI if it stays stable
+- Deploy and configure a Prometheus server when a monitoring environment exists
+- Add scrape configuration and alert rules
+- Add Alertmanager routing and Grafana dashboards if operationally justified
+- Add distributed tracing/OpenTelemetry if needed
 
 Acceptance criteria:
 
-- GitHub explains the project without extra context.
-- The demo path is obvious.
-- Limitations are honest.
-- The project is ready to share without requiring extra context.
+- Deployment-oriented operational concerns are addressed without overstating current scope.
+- External monitoring and alerting can be added without changing the application boundary.
+- Limitations remain honest about what the repository does not deploy.
 
 ## Intentionally Deferred
 
 - Kubernetes deployment
 - Kafka or a distributed event bus
-- Complex multi-tenant authorization beyond the planned JWT boundary
+- Complex multi-tenant authorization beyond the current ownership boundary
 - A frontend dashboard
 - Full production secrets management
-- Heavy observability stacks such as OpenTelemetry, Prometheus, or Grafana
+- A full observability platform: Prometheus server, scrape configuration, alert
+  rules, Alertmanager, Grafana, and optional distributed tracing/OpenTelemetry
+- Semantic and hybrid search until a lexical evaluation baseline exists
 
-These can be useful later, but they are not necessary for the current backend-search scope.
+These can be useful later, but they are not implemented by the current
+backend-search milestone. Prometheus-compatible application metrics are already
+implemented; only the external monitoring platform remains deferred.
