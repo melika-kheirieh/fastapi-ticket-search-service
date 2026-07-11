@@ -1,25 +1,7 @@
 from datetime import datetime, timezone
 
-import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-
-from app.db.base import Base
 from app.models.ticket import Ticket
 from app.repositories.ticket_repository import TicketRepository
-
-
-@pytest.fixture
-def db_session():
-    engine = create_engine("sqlite+pysqlite:///:memory:")
-    TestingSessionLocal = sessionmaker(bind=engine)
-    Base.metadata.create_all(bind=engine)
-    db = TestingSessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-        engine.dispose()
 
 
 def add_ticket(

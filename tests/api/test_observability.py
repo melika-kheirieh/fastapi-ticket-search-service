@@ -1,4 +1,3 @@
-import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -18,13 +17,6 @@ class UnhealthySearchClient:
 class FailingSearchClient:
     def ping(self):
         raise ConnectionError("Elasticsearch is unavailable")
-
-
-@pytest.fixture(autouse=True)
-def clear_dependency_overrides():
-    app.dependency_overrides.clear()
-    yield
-    app.dependency_overrides.clear()
 
 
 def test_request_id_header_is_added_to_response():

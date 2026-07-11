@@ -1,30 +1,11 @@
 from datetime import UTC, datetime, timedelta
 
-import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-
-from app.db.base import Base
 from app.models.outbox_event import OutboxEvent
 from app.outbox.processor import OutboxProcessor, get_retry_delay_seconds
 from app.repositories.outbox_event_repository import OutboxEventRepository
 from app.schemas.ticket import TicketCreateRequest
 from app.services.ticket_service import TicketService
 
-
-@pytest.fixture
-def db_session():
-    engine = create_engine("sqlite+pysqlite:///:memory:")
-    TestingSessionLocal = sessionmaker(bind=engine)
-
-    Base.metadata.create_all(bind=engine)
-
-    db = TestingSessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-        engine.dispose()
 
 def utc_now_naive() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
