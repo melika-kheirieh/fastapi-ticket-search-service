@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 
 BASE_URL="${BASE_URL:-http://localhost:8001}"
+VERIFY_USER_ID="${VERIFY_USER_ID:-1}"
 
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
@@ -24,6 +25,7 @@ request() {
         -X "$method" \
         "$BASE_URL$path" \
         -H "Content-Type: application/json" \
+        -H "X-User-ID: ${VERIFY_USER_ID}" \
         -d "$payload"
     )"
   else
@@ -32,7 +34,8 @@ request() {
         -o "$response_file" \
         -w "%{http_code}" \
         -X "$method" \
-        "$BASE_URL$path"
+        "$BASE_URL$path" \
+        -H "X-User-ID: ${VERIFY_USER_ID}"
     )"
   fi
 
@@ -85,19 +88,23 @@ assert_json_field_equals() {
   echo "OK: JSON field $field == $expected"
 }
 
-echo "Verifying ticket API at $BASE_URL"
+echo "Verifying ticket API at $BASE_URL as user id $VERIFY_USER_ID"
 
 request "GET" "/health" "200"
 
-ticket_payload='{
-  "user_id": 1,
+ticket_payload="$(
+  cat <<JSON
+{
+  "user_id": ${VERIFY_USER_ID},
   "title": "Ticket API verification",
   "description": "Created by the ticket API verification script",
   "status": "open",
   "priority": "high",
   "category": "auth",
   "tags": ["verification", "auth"]
-}'
+}
+JSON
+)"
 
 request "POST" "/tickets" "201" "$ticket_payload"
 ticket_id="$(json_field "id")"
@@ -106,12 +113,12 @@ echo "Created ticket id: $ticket_id"
 
 request "GET" "/tickets/$ticket_id" "200"
 assert_json_field_equals "id" "$ticket_id"
-assert_json_field_equals "user_id" "1"
+assert_json_field_equals "user_id" "$VERIFY_USER_ID"
 assert_json_field_equals "status" "open"
 assert_json_field_equals "priority" "high"
 assert_json_field_equals "category" "auth"
 
-request "GET" "/tickets?user_id=1" "200"
+request "GET" "/tickets?user_id=${VERIFY_USER_ID}" "200"
 request "GET" "/tickets?status=open" "200"
 request "GET" "/tickets?priority=high" "200"
 request "GET" "/tickets?category=auth&limit=10&offset=0" "200"

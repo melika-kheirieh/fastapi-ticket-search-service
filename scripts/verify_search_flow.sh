@@ -6,6 +6,7 @@ ELASTICSEARCH_URL="${ELASTICSEARCH_URL:-http://localhost:9200}"
 API_READY_TIMEOUT_SECONDS="${API_READY_TIMEOUT_SECONDS:-120}"
 ELASTICSEARCH_READY_TIMEOUT_SECONDS="${ELASTICSEARCH_READY_TIMEOUT_SECONDS:-120}"
 OUTBOX_READY_TIMEOUT_SECONDS="${OUTBOX_READY_TIMEOUT_SECONDS:-60}"
+SMOKE_USER_ID="${SMOKE_USER_ID:-9001}"
 MARKER="smoke-$(date +%s)"
 
 require_command() {
@@ -134,12 +135,13 @@ wait_for_http "Elasticsearch" "$ELASTICSEARCH_URL" "$ELASTICSEARCH_READY_TIMEOUT
 echo "Ensuring Elasticsearch index exists"
 docker compose exec -T api python -m app.search.setup >/dev/null
 
-echo "Creating a smoke ticket"
+echo "Creating a smoke ticket for user id $SMOKE_USER_ID"
 create_response="$(
   curl -fsS -X POST "$BASE_URL/tickets" \
     -H "Content-Type: application/json" \
+    -H "X-User-ID: ${SMOKE_USER_ID}" \
     -d "{
-      \"user_id\": 9001,
+      \"user_id\": ${SMOKE_USER_ID},
       \"title\": \"${MARKER} payment search smoke\",
       \"description\": \"Verify ticket search projection through Elasticsearch\",
       \"status\": \"open\",
@@ -156,10 +158,11 @@ ticket_id="$(
 
 wait_for_outbox_processed "$ticket_id"
 
-echo "Searching for smoke ticket through Elasticsearch"
+echo "Searching for smoke ticket through Elasticsearch as user id $SMOKE_USER_ID"
 for _ in $(seq 1 20); do
   search_response="$(
     curl -fsS -G "$BASE_URL/tickets/search" \
+      -H "X-User-ID: ${SMOKE_USER_ID}" \
       --data-urlencode "q=$MARKER" \
       --data-urlencode "tag=smoke" \
       --data-urlencode "limit=5"
