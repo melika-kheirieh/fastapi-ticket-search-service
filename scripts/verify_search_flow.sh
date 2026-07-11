@@ -76,6 +76,24 @@ assert_metrics_contains() {
   fi
 }
 
+verify_compose_service_user() {
+  local service="$1"
+  local expected_user="app"
+  local actual_user
+
+  actual_user="$(docker compose exec -T "$service" whoami | tr -d '[:space:]')"
+
+  if [ "$actual_user" != "$expected_user" ]; then
+    echo "Service $service is not running as expected user" >&2
+    echo "Expected: $expected_user" >&2
+    echo "Actual: $actual_user" >&2
+    show_docker_diagnostics
+    exit 1
+  fi
+
+  echo "Service $service is running as user $expected_user"
+}
+
 wait_for_outbox_processed() {
   local ticket_id="$1"
   local elapsed=0
@@ -119,6 +137,15 @@ require_command grep
 echo "Checking API health at $BASE_URL"
 wait_for_http "API" "$BASE_URL/health" "$API_READY_TIMEOUT_SECONDS"
 
+echo "Verifying runtime user for api service"
+verify_compose_service_user "api"
+
+echo "Verifying runtime user for worker service"
+verify_compose_service_user "worker"
+
+echo "Verifying runtime user for beat service"
+verify_compose_service_user "beat"
+
 echo "Checking metrics endpoint at $BASE_URL/metrics"
 wait_for_http "Metrics endpoint" "$BASE_URL/metrics" "$API_READY_TIMEOUT_SECONDS"
 
@@ -134,6 +161,9 @@ wait_for_http "Elasticsearch" "$ELASTICSEARCH_URL" "$ELASTICSEARCH_READY_TIMEOUT
 
 echo "Ensuring Elasticsearch index exists"
 docker compose exec -T api python -m app.search.setup >/dev/null
+
+echo "Checking search subsystem health at $BASE_URL/health/search"
+wait_for_http "Search subsystem" "$BASE_URL/health/search" "$API_READY_TIMEOUT_SECONDS"
 
 echo "Creating a smoke ticket for user id $SMOKE_USER_ID"
 create_response="$(
