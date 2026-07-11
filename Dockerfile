@@ -9,6 +9,9 @@ ARG PIP_INDEX_URL=https://pypi.org/simple
 ARG PIP_RETRIES=10
 ARG PIP_TIMEOUT=120
 
+RUN groupadd --system app \
+    && useradd --system --gid app --home-dir /app --shell /usr/sbin/nologin app
+
 COPY requirements.txt .
 
 RUN python -m pip install --no-cache-dir \
@@ -21,6 +24,10 @@ RUN python -m pip install --no-cache-dir \
 COPY app ./app
 COPY alembic ./alembic
 COPY alembic.ini .
+
+RUN chown -R app:app /app
+
+USER app
 
 EXPOSE 8000
 
