@@ -5,10 +5,10 @@ from app.auth.dependencies import get_current_user
 from app.auth.models import CurrentUser
 
 
-test_app = FastAPI()
+auth_app = FastAPI()
 
 
-@test_app.get("/me")
+@auth_app.get("/me")
 def read_current_user(
     current_user: CurrentUser = Depends(get_current_user),
 ):
@@ -20,7 +20,7 @@ def read_current_user(
 
 
 def test_current_user_defaults_to_user_role():
-    client = TestClient(test_app)
+    client = TestClient(auth_app)
 
     response = client.get(
         "/me",
@@ -38,7 +38,7 @@ def test_current_user_defaults_to_user_role():
 
 
 def test_current_user_accepts_admin_role():
-    client = TestClient(test_app)
+    client = TestClient(auth_app)
 
     response = client.get(
         "/me",
@@ -57,7 +57,7 @@ def test_current_user_accepts_admin_role():
 
 
 def test_current_user_requires_user_id_header():
-    client = TestClient(test_app)
+    client = TestClient(auth_app)
 
     response = client.get("/me")
 
@@ -68,7 +68,7 @@ def test_current_user_requires_user_id_header():
 
 
 def test_current_user_rejects_invalid_user_id():
-    client = TestClient(test_app)
+    client = TestClient(auth_app)
 
     response = client.get(
         "/me",
@@ -84,7 +84,7 @@ def test_current_user_rejects_invalid_user_id():
 
 
 def test_current_user_rejects_non_positive_user_id():
-    client = TestClient(test_app)
+    client = TestClient(auth_app)
 
     response = client.get(
         "/me",
@@ -100,7 +100,7 @@ def test_current_user_rejects_non_positive_user_id():
 
 
 def test_current_user_rejects_invalid_role():
-    client = TestClient(test_app)
+    client = TestClient(auth_app)
 
     response = client.get(
         "/me",

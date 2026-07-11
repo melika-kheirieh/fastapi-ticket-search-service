@@ -1,41 +1,7 @@
-import pytest
-from fastapi.testclient import TestClient
-
-from app.api.tickets import get_db
-from app.main import app
-from app.schemas.ticket import TicketResponse
+from tests.api.support import USER_HEADERS, ticket_response
 
 
-USER_HEADERS = {
-    "X-User-ID": "7",
-}
-
-
-@pytest.fixture(autouse=True)
-def override_db_dependency():
-    app.dependency_overrides[get_db] = lambda: object()
-    yield
-    app.dependency_overrides.clear()
-
-
-def ticket_response(**overrides):
-    data = {
-        "id": 1,
-        "user_id": 7,
-        "title": "Payment failed",
-        "description": "Payment was not captured",
-        "status": "open",
-        "priority": "high",
-        "category": "billing",
-        "tags": ["payment", "checkout"],
-        "created_at": "2026-06-23T10:30:00+00:00",
-        "updated_at": "2026-06-23T10:35:00+00:00",
-    }
-    data.update(overrides)
-    return TicketResponse(**data)
-
-
-def test_create_ticket_returns_created_ticket(monkeypatch):
+def test_create_ticket_returns_created_ticket(client, monkeypatch):
     calls = {}
 
     class FakeTicketService:
@@ -56,7 +22,6 @@ def test_create_ticket_returns_created_ticket(monkeypatch):
 
     monkeypatch.setattr("app.api.tickets.TicketService", FakeTicketService)
 
-    client = TestClient(app)
     response = client.post(
         "/tickets",
         headers=USER_HEADERS,
@@ -77,9 +42,7 @@ def test_create_ticket_returns_created_ticket(monkeypatch):
     assert calls["payload"].tags == ["payment", "checkout"]
 
 
-def test_create_ticket_validates_required_fields():
-    client = TestClient(app)
-
+def test_create_ticket_validates_required_fields(client):
     response = client.post(
         "/tickets",
         headers=USER_HEADERS,
@@ -93,7 +56,7 @@ def test_create_ticket_validates_required_fields():
     assert response.status_code == 422
 
 
-def test_list_tickets_forwards_filters_and_pagination(monkeypatch):
+def test_list_tickets_forwards_filters_and_pagination(client, monkeypatch):
     calls = {}
 
     class FakeTicketService:
@@ -106,7 +69,6 @@ def test_list_tickets_forwards_filters_and_pagination(monkeypatch):
 
     monkeypatch.setattr("app.api.tickets.TicketService", FakeTicketService)
 
-    client = TestClient(app)
     response = client.get(
         "/tickets",
         headers=USER_HEADERS,
@@ -132,9 +94,7 @@ def test_list_tickets_forwards_filters_and_pagination(monkeypatch):
     }
 
 
-def test_list_tickets_validates_pagination():
-    client = TestClient(app)
-
+def test_list_tickets_validates_pagination(client):
     response = client.get(
         "/tickets",
         headers=USER_HEADERS,
@@ -144,7 +104,27 @@ def test_list_tickets_validates_pagination():
     assert response.status_code == 422
 
 
-def test_get_ticket_returns_not_found_when_service_returns_none(monkeypatch):
+def test_get_ticket_returns_ticket_for_owner(client, monkeypatch):
+    class FakeTicketService:
+        def __init__(self, db):
+            pass
+
+        def get_ticket_by_id(self, ticket_id):
+            return ticket_response(id=ticket_id, user_id=7)
+
+    monkeypatch.setattr("app.api.tickets.TicketService", FakeTicketService)
+
+    response = client.get(
+        "/tickets/1",
+        headers=USER_HEADERS,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["id"] == 1
+    assert response.json()["user_id"] == 7
+
+
+def test_get_ticket_returns_not_found_when_service_returns_none(client, monkeypatch):
     class FakeTicketService:
         def __init__(self, db):
             pass
@@ -154,7 +134,6 @@ def test_get_ticket_returns_not_found_when_service_returns_none(monkeypatch):
 
     monkeypatch.setattr("app.api.tickets.TicketService", FakeTicketService)
 
-    client = TestClient(app)
     response = client.get(
         "/tickets/999",
         headers=USER_HEADERS,
@@ -164,9 +143,36 @@ def test_get_ticket_returns_not_found_when_service_returns_none(monkeypatch):
     assert response.json() == {"detail": "Ticket not found"}
 
 
-def test_update_ticket_validates_non_empty_payload():
-    client = TestClient(app)
+def test_update_ticket_updates_ticket_for_owner(client, monkeypatch):
+    calls = {}
 
+    class FakeTicketService:
+        def __init__(self, db):
+            pass
+
+        def get_ticket_by_id(self, ticket_id):
+            return ticket_response(id=ticket_id, user_id=7)
+
+        def update_ticket(self, ticket_id, payload):
+            calls["ticket_id"] = ticket_id
+            calls["payload"] = payload
+            return ticket_response(id=ticket_id, user_id=7, status=payload.status)
+
+    monkeypatch.setattr("app.api.tickets.TicketService", FakeTicketService)
+
+    response = client.patch(
+        "/tickets/1",
+        headers=USER_HEADERS,
+        json={"status": "closed"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "closed"
+    assert calls["ticket_id"] == 1
+    assert calls["payload"].status == "closed"
+
+
+def test_update_ticket_validates_non_empty_payload(client):
     response = client.patch(
         "/tickets/1",
         headers=USER_HEADERS,
@@ -176,7 +182,7 @@ def test_update_ticket_validates_non_empty_payload():
     assert response.status_code == 422
 
 
-def test_update_ticket_returns_not_found_when_service_returns_none(monkeypatch):
+def test_update_ticket_returns_not_found_when_service_returns_none(client, monkeypatch):
     class FakeTicketService:
         def __init__(self, db):
             pass
@@ -189,7 +195,6 @@ def test_update_ticket_returns_not_found_when_service_returns_none(monkeypatch):
 
     monkeypatch.setattr("app.api.tickets.TicketService", FakeTicketService)
 
-    client = TestClient(app)
     response = client.patch(
         "/tickets/999",
         headers=USER_HEADERS,
@@ -200,7 +205,7 @@ def test_update_ticket_returns_not_found_when_service_returns_none(monkeypatch):
     assert response.json() == {"detail": "Ticket not found"}
 
 
-def test_delete_ticket_returns_no_content(monkeypatch):
+def test_delete_ticket_returns_no_content(client, monkeypatch):
     calls = {}
 
     class FakeTicketService:
@@ -216,7 +221,6 @@ def test_delete_ticket_returns_no_content(monkeypatch):
 
     monkeypatch.setattr("app.api.tickets.TicketService", FakeTicketService)
 
-    client = TestClient(app)
     response = client.delete(
         "/tickets/1",
         headers=USER_HEADERS,
@@ -227,7 +231,7 @@ def test_delete_ticket_returns_no_content(monkeypatch):
     assert calls["ticket_id"] == 1
 
 
-def test_delete_ticket_returns_not_found_when_service_returns_false(monkeypatch):
+def test_delete_ticket_returns_not_found_when_service_returns_false(client, monkeypatch):
     class FakeTicketService:
         def __init__(self, db):
             pass
@@ -240,7 +244,6 @@ def test_delete_ticket_returns_not_found_when_service_returns_false(monkeypatch)
 
     monkeypatch.setattr("app.api.tickets.TicketService", FakeTicketService)
 
-    client = TestClient(app)
     response = client.delete(
         "/tickets/999",
         headers=USER_HEADERS,

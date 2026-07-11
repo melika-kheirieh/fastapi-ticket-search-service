@@ -51,13 +51,6 @@ class FakeOutboxDbSession:
         return FakeOutboxCountResult()
 
 
-@pytest.fixture(autouse=True)
-def clear_dependency_overrides():
-    app.dependency_overrides.clear()
-    yield
-    app.dependency_overrides.clear()
-
-
 @pytest.fixture
 def metrics_db_override():
     app.dependency_overrides[get_db] = lambda: FakeOutboxDbSession()

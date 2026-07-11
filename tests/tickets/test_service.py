@@ -1,26 +1,10 @@
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
 
-from app.db.base import Base
 from app.models.outbox_event import OutboxEvent
 from app.models.ticket import Ticket
 from app.repositories.outbox_event_repository import OutboxEventRepository
 from app.schemas.ticket import TicketCreateRequest, TicketUpdateRequest
 from app.services.ticket_service import TicketService
-
-
-@pytest.fixture
-def db_session():
-    engine = create_engine("sqlite+pysqlite:///:memory:")
-    TestingSessionLocal = sessionmaker(bind=engine)
-    Base.metadata.create_all(bind=engine)
-    db = TestingSessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-        engine.dispose()
 
 
 def add_ticket(db_session) -> Ticket:
@@ -121,6 +105,41 @@ def test_update_ticket_records_outbox_event(db_session):
     assert events[0].status == "pending"
 
 
+def test_update_ticket_creates_sequential_outbox_events(db_session):
+    service = TicketService(db_session)
+
+    ticket = service.create_ticket(
+        TicketCreateRequest(
+            user_id=1,
+            title="Old title",
+            description="Old description",
+            status="open",
+            priority="medium",
+            category="billing",
+            tags=["invoice"],
+        )
+    )
+
+    updated_ticket = service.update_ticket(
+        ticket.id,
+        TicketUpdateRequest(title="New title"),
+    )
+
+    events = (
+        db_session.query(OutboxEvent)
+        .order_by(OutboxEvent.id)
+        .all()
+    )
+
+    assert updated_ticket is not None
+    assert updated_ticket.title == "New title"
+    assert len(events) == 2
+    assert events[1].aggregate_type == "ticket"
+    assert events[1].aggregate_id == ticket.id
+    assert events[1].event_type == "ticket.updated"
+    assert events[1].status == "pending"
+
+
 def test_update_ticket_returns_none_when_ticket_does_not_exist(db_session):
     service = TicketService(db_session)
 
@@ -154,6 +173,42 @@ def test_delete_ticket_records_outbox_event(db_session):
     assert events[0].aggregate_id == ticket_id
     assert events[0].event_type == "ticket.deleted"
     assert events[0].status == "pending"
+
+
+def test_delete_ticket_creates_sequential_outbox_events(db_session):
+    service = TicketService(db_session)
+
+    ticket = service.create_ticket(
+        TicketCreateRequest(
+            user_id=1,
+            title="Delete me",
+            description="This ticket should be deleted.",
+            status="open",
+            priority="low",
+            category="general",
+            tags=["cleanup"],
+        )
+    )
+
+    ticket_id = ticket.id
+
+    result = service.delete_ticket(ticket_id)
+
+    events = (
+        db_session.query(OutboxEvent)
+        .order_by(OutboxEvent.id)
+        .all()
+    )
+
+    deleted_ticket = db_session.get(Ticket, ticket_id)
+
+    assert result is True
+    assert deleted_ticket is None
+    assert len(events) == 2
+    assert events[1].aggregate_type == "ticket"
+    assert events[1].aggregate_id == ticket_id
+    assert events[1].event_type == "ticket.deleted"
+    assert events[1].status == "pending"
 
 
 def test_delete_ticket_returns_false_when_ticket_does_not_exist(db_session):
