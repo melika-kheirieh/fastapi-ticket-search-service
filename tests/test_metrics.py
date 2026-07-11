@@ -7,6 +7,11 @@ from app.search.dependencies import get_elasticsearch_client
 from app.search.exceptions import SearchUnavailableError
 
 
+USER_HEADERS = {
+    "X-User-ID": "1",
+}
+
+
 class FakeSearchClient:
     def search(self, index: str, body: dict) -> dict:
         return {
@@ -85,7 +90,7 @@ def test_search_success_metrics_are_recorded(metrics_db_override):
 
     client = TestClient(app)
 
-    search_response = client.get("/tickets/search?q=payment")
+    search_response = client.get("/tickets/search?q=payment", headers=USER_HEADERS)
     assert search_response.status_code == 200
 
     metrics_response = client.get("/metrics")
@@ -107,7 +112,7 @@ def test_search_unavailable_metrics_are_recorded(metrics_db_override, monkeypatc
 
     client = TestClient(app)
 
-    search_response = client.get("/tickets/search?q=payment")
+    search_response = client.get("/tickets/search?q=payment", headers=USER_HEADERS)
     assert search_response.status_code == 503
 
     metrics_response = client.get("/metrics")

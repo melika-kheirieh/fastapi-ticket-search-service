@@ -3,6 +3,12 @@ from fastapi.testclient import TestClient
 
 from app.api.tickets import get_db
 from app.main import app
+from app.schemas.ticket import TicketResponse
+
+
+USER_HEADERS = {
+    "X-User-ID": "7",
+}
 
 
 @pytest.fixture(autouse=True)
@@ -26,7 +32,7 @@ def ticket_response(**overrides):
         "updated_at": "2026-06-23T10:35:00+00:00",
     }
     data.update(overrides)
-    return data
+    return TicketResponse(**data)
 
 
 def test_create_ticket_returns_created_ticket(monkeypatch):
@@ -100,6 +106,7 @@ def test_list_tickets_forwards_filters_and_pagination(monkeypatch):
     client = TestClient(app)
     response = client.get(
         "/tickets",
+        headers=USER_HEADERS,
         params={
             "status": "open",
             "priority": "high",
@@ -125,7 +132,7 @@ def test_list_tickets_forwards_filters_and_pagination(monkeypatch):
 def test_list_tickets_validates_pagination():
     client = TestClient(app)
 
-    response = client.get("/tickets", params={"limit": 0})
+    response = client.get("/tickets", headers=USER_HEADERS, params={"limit": 0})
 
     assert response.status_code == 422
 
@@ -141,7 +148,7 @@ def test_get_ticket_returns_not_found_when_service_returns_none(monkeypatch):
     monkeypatch.setattr("app.api.tickets.TicketService", FakeTicketService)
 
     client = TestClient(app)
-    response = client.get("/tickets/999")
+    response = client.get("/tickets/999", headers=USER_HEADERS)
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Ticket not found"}

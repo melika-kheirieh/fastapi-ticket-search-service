@@ -13,6 +13,8 @@ from fastapi import (
 )
 from sqlalchemy.orm import Session
 
+from app.auth.dependencies import get_current_user
+from app.auth.models import CurrentUser
 from app.db.session import get_db
 from app.observability.metrics import record_search_request, record_search_unavailable
 from app.schemas.ticket import (
@@ -29,6 +31,45 @@ from app.services.ticket_service import TicketService
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tickets", tags=["Tickets"])
+
+
+def _resolve_visible_user_id(
+    *,
+    current_user: CurrentUser,
+    requested_user_id: int | None,
+) -> int | None:
+    if current_user.is_admin:
+        return requested_user_id
+
+    if requested_user_id is not None and requested_user_id != current_user.user_id:
+        raise HTTPException(
+            status_code=http_status.HTTP_403_FORBIDDEN,
+            detail="Not allowed to access tickets for another user",
+        )
+
+    return current_user.user_id
+
+
+def _get_ticket_user_id(ticket) -> int:
+    if isinstance(ticket, dict):
+        return ticket["user_id"]
+
+    return ticket.user_id
+
+
+def _ensure_ticket_is_visible(
+    *,
+    ticket,
+    current_user: CurrentUser,
+) -> None:
+    if current_user.is_admin:
+        return
+
+    if _get_ticket_user_id(ticket) != current_user.user_id:
+        raise HTTPException(
+            status_code=http_status.HTTP_404_NOT_FOUND,
+            detail="Ticket not found",
+        )
 
 
 @router.post(
@@ -53,14 +94,20 @@ def list_tickets(
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
+    visible_user_id = _resolve_visible_user_id(
+        current_user=current_user,
+        requested_user_id=user_id,
+    )
+
     service = TicketService(db)
 
     return service.list_tickets(
         status=status,
         priority=priority,
         category=category,
-        user_id=user_id,
+        user_id=visible_user_id,
         limit=limit,
         offset=offset,
     )
@@ -79,7 +126,13 @@ def search_tickets(
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     search_client=Depends(get_elasticsearch_client),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
+    visible_user_id = _resolve_visible_user_id(
+        current_user=current_user,
+        requested_user_id=user_id,
+    )
+
     started_at = time.perf_counter()
 
     try:
@@ -90,7 +143,7 @@ def search_tickets(
             priority=priority,
             category=category,
             tag=tag,
-            user_id=user_id,
+            user_id=visible_user_id,
             created_from=created_from,
             created_to=created_to,
             limit=limit,
@@ -114,7 +167,8 @@ def search_tickets(
                 "priority": priority,
                 "category": category,
                 "tag": tag,
-                "user_id": user_id,
+                "requested_user_id": user_id,
+                "visible_user_id": visible_user_id,
                 "limit": limit,
                 "offset": offset,
             },
@@ -138,6 +192,7 @@ def search_tickets(
 def get_ticket(
     ticket_id: int = Path(..., gt=0),
     db: Session = Depends(get_db),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
     service = TicketService(db)
     ticket = service.get_ticket_by_id(ticket_id)
@@ -147,6 +202,11 @@ def get_ticket(
             status_code=http_status.HTTP_404_NOT_FOUND,
             detail="Ticket not found",
         )
+
+    _ensure_ticket_is_visible(
+        ticket=ticket,
+        current_user=current_user,
+    )
 
     return ticket
 
