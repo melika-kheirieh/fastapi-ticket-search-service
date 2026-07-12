@@ -147,7 +147,7 @@ hardening milestone. PostgreSQL remains the durable source of truth,
 Elasticsearch remains an eventually consistent, rebuildable projection, and
 authorization is enforced synchronously across both data paths.
 
-## Next Steps
+## Future Phases
 
 ### Phase 5: Lexical Search Maturity, PostgreSQL FTS, Persian Analyzer, and Eval
 
@@ -258,6 +258,8 @@ Acceptance criteria:
 - A full observability platform: Prometheus server, scrape configuration, alert
   rules, Alertmanager, Grafana, and optional distributed tracing/OpenTelemetry
 - Semantic and hybrid search until a lexical evaluation baseline exists
+- PostgreSQL full-text search and Persian analyzer support
+- Production authentication (JWT/OIDC or trusted-gateway identity)
 
 These can be useful later, but they are not implemented by the current
 backend-search milestone. Prometheus-compatible application metrics are already

@@ -2,7 +2,7 @@
 
 This document collects the commands used most often during local development and verification.
 
-## Local Python
+## Local Python Setup
 
 Create a virtual environment:
 
@@ -16,12 +16,6 @@ Install dependencies:
 ```bash
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
-```
-
-Run migrations:
-
-```bash
-alembic upgrade head
 ```
 
 Run the API:
@@ -106,7 +100,22 @@ Remove local PostgreSQL and Elasticsearch volumes:
 docker compose down -v
 ```
 
-## Elasticsearch Index
+## Migrations
+
+Apply database migrations locally:
+
+```bash
+alembic upgrade head
+```
+
+In Docker Compose, the `migrate` service runs Alembic before the API starts.
+If the API fails because the schema is missing or outdated, check:
+
+```bash
+docker compose logs --tail=120 migrate
+```
+
+## Elasticsearch Setup and Reindex
 
 Create the configured ticket index:
 
@@ -135,7 +144,10 @@ docker compose exec api python -m app.search.reindex
 PostgreSQL remains the durable source of truth. Reindexing recreates the
 eventually consistent Elasticsearch projection from current ticket rows.
 
-## Local Demo Identity Headers
+Index mapping: [`app/search/mappings.py`](../app/search/mappings.py).
+Query construction: [`app/search/queries.py`](../app/search/queries.py).
+
+## Demo Identity Headers
 
 All `/tickets` endpoints require `X-User-ID`. The optional `X-User-Role`
 defaults to `user` and accepts `user` or `admin`. These headers provide local
@@ -251,16 +263,15 @@ scripts/verify_search_flow.sh
 
 The script currently verifies:
 
-1. API readiness.
-2. The `app` runtime user for the API, worker, and beat.
-3. `/metrics` availability and the HTTP/outbox metric families used by the
-   smoke flow.
-4. Elasticsearch readiness and ticket-index setup.
-5. `/health/search`.
-6. Authenticated ticket creation with matching header and payload ownership.
-7. Processing of the corresponding `ticket.created` outbox event.
-8. Authenticated Elasticsearch search for the created ticket.
-9. Exposure of search request and duration metrics.
+1. API readiness
+2. The `app` runtime user for the API, worker, and beat
+3. `/metrics` availability and the HTTP/outbox metric families used by the smoke flow
+4. Elasticsearch readiness and ticket-index setup
+5. `/health/search`
+6. Authenticated ticket creation with matching header and payload ownership
+7. Processing of the corresponding `ticket.created` outbox event
+8. Authenticated Elasticsearch search for the created ticket
+9. Exposure of search request and duration metrics
 
 On failure it prints Docker Compose state and recent logs for the API,
 migration, PostgreSQL, Elasticsearch, worker, and beat services.
@@ -302,7 +313,7 @@ Whether a field appears in worker or beat console output depends on Celery's
 formatter. When debugging an API request, start with the response
 `X-Request-ID` and search API logs for the same `request_id`.
 
-## Common Local Fixes
+## Troubleshooting
 
 | Symptom | Likely cause | Command |
 | --- | --- | --- |
@@ -335,7 +346,7 @@ If Elasticsearch is reachable but the ticket index is absent, create it with:
 docker compose exec api python -m app.search.setup
 ```
 
-## Security and Production Boundaries
+## Production and Security Boundaries
 
 A real deployment must replace the local identity headers with trusted,
 verifiable identity while preserving the existing ownership authorization
