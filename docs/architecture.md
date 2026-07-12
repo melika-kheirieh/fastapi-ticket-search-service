@@ -104,8 +104,8 @@ flowchart TD
     E --> G["Mark failed with retry metadata"]
 ```
 
-Redis is the Celery broker and result backend. The Docker Compose beat schedule
-is currently fixed at 10 seconds.
+Redis is the Celery broker and result backend. The Celery beat interval is
+configured through `OUTBOX_BEAT_SCHEDULE_SECONDS` (default: 10 seconds).
 
 ## Retry and Stuck-Event Recovery
 

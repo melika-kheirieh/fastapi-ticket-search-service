@@ -20,8 +20,8 @@ celery_app.conf.update(
 )
 
 celery_app.conf.beat_schedule = {
-    "process-outbox-batch-every-10-seconds": {
+    "process-outbox-batch": {
         "task": "process_outbox_batch",
-        "schedule": 10.0,
+        "schedule": settings.outbox_beat_schedule_seconds,
     },
 }

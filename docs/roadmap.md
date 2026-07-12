@@ -105,8 +105,8 @@ Completed work:
 - Celery task for scheduled outbox batch processing
 - Celery worker and beat services in Docker Compose
 - Redis service for Celery broker/result backend
-- Configurable batch size, retry count, and processing timeout, with the current
-  Celery beat schedule fixed at 10 seconds
+- Configurable batch size, retry count, processing timeout, and Celery beat
+  interval (`OUTBOX_BEAT_SCHEDULE_SECONDS`, default 10 seconds)
 - Smoke verification for the API-to-worker-to-Elasticsearch path
 - Unit tests for Celery schedule configuration and outbox task behavior
 
