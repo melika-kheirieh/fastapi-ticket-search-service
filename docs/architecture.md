@@ -43,7 +43,7 @@ integration are not implemented.
 ## Authorization Model
 
 Regular users are restricted to tickets whose `user_id` matches their current
-user. Admins can access tickets across users.
+user ID. Admins can access tickets across users.
 
 - Create validates payload ownership before calling the ticket service.
 - List resolves a regular user's ownership filter before querying PostgreSQL.
@@ -77,9 +77,22 @@ flowchart TD
 Elasticsearch does not participate in this transaction. The application does
 not need Elasticsearch to be healthy in order to accept ticket writes.
 
-## Incremental Search Sync
+## Transactional Outbox Consistency
 
-Celery beat schedules outbox-processing batches, and the Celery worker runs them after the write transaction exists in PostgreSQL.
+Ticket state and outbox intent are transactionally consistent inside
+PostgreSQL: the ticket row change and outbox event (`ticket.created`,
+`ticket.updated`, or `ticket.deleted`) are committed in the same transaction.
+
+If Elasticsearch is down during a write, the PostgreSQL commit can still
+succeed. The durable outbox event retains the intent to update search. Search
+itself remains eventually consistent until a worker processes ready events or a
+full reindex rebuilds the projection.
+
+## Celery and Redis Processing Path
+
+Celery beat schedules outbox-processing batches through Redis. The Celery
+worker claims ready events from PostgreSQL and indexes or deletes documents in
+Elasticsearch.
 
 ```mermaid
 flowchart TD
@@ -91,6 +104,11 @@ flowchart TD
     E --> G["Mark failed with retry metadata"]
 ```
 
+Redis is the Celery broker and result backend. The Docker Compose beat schedule
+is currently fixed at 10 seconds.
+
+## Retry and Stuck-Event Recovery
+
 The processor stores retry state in PostgreSQL:
 
 - `status`
@@ -99,29 +117,31 @@ The processor stores retry state in PostgreSQL:
 - `next_attempt_at`
 - `processed_at`
 
-The processor claims pending events, failed events whose retry time has arrived
-and whose retry count remains below the configured limit, and processing events
-older than the configured timeout whose retry count also remains below the
-limit. Row locking with `SKIP LOCKED` avoids duplicate claims across workers,
-while timeout-based reclamation recovers work left stuck by an interrupted
-processor. This keeps failure handling visible and testable.
+It claims:
 
-## Full Rebuild
+- `pending` events
+- `failed` events whose `next_attempt_at` has arrived and whose `retry_count`
+  remains below the configured limit
+- `processing` events older than the configured timeout whose `retry_count`
+  also remains below the limit
 
-The reindex command is the recovery path for a missing or stale search projection.
+Row locking with `SKIP LOCKED` avoids duplicate claims across workers.
+Timeout-based reclamation recovers work left stuck by an interrupted processor.
+Failed events retain visible retry metadata until they are processed or exhaust
+the retry limit.
 
-```mermaid
-flowchart TD
-    A["PostgreSQL tickets"] --> B["python -m app.search.reindex"]
-    B --> C["tickets_v1 index"]
-```
+## Elasticsearch Search Projection
 
-Reindexing is useful when:
+Elasticsearch stores a rebuildable projection of ticket documents for
+full-text search and filter queries. It is not the system of record.
 
-- the Elasticsearch index is recreated
-- the mapping changes
-- local development data is reset
-- projection state is suspected to be stale
+- Index mapping and settings: [`app/search/mappings.py`](../app/search/mappings.py)
+- Query construction (`multi_match`, filters, pagination, sort):
+  [`app/search/queries.py`](../app/search/queries.py)
+
+The default index name is `tickets_v1`. Create a missing index with
+`python -m app.search.setup`. Rebuild from PostgreSQL with
+`python -m app.search.reindex`.
 
 ## Search Authorization Boundary
 
@@ -146,7 +166,24 @@ Including ownership in the Elasticsearch query reduces unauthorized exposure
 at the search data-access boundary. The dedicated query builder also keeps this
 behavior unit-testable without a live Elasticsearch service.
 
-## Metrics Architecture
+## Reindex Recovery
+
+The reindex command is the recovery path for a missing or stale search projection.
+
+```mermaid
+flowchart TD
+    A["PostgreSQL tickets"] --> B["python -m app.search.reindex"]
+    B --> C["tickets_v1 index"]
+```
+
+Reindexing is useful when:
+
+- the Elasticsearch index is recreated
+- the mapping changes
+- local development data is reset
+- projection state is suspected to be stale
+
+## Metrics and Health Architecture
 
 HTTP middleware records request counters and duration histograms. The search
 route records success or unavailable outcomes and search duration around the
@@ -172,19 +209,13 @@ The application defines:
 - `outbox_events_by_status`
 
 For matched endpoints, HTTP labels use the method, route template, and status.
-Query strings and explicit identifiers such as request IDs, ticket IDs, and
-user IDs are intentionally excluded from metric labels. Instrumentation is
-kept outside the PostgreSQL ticket/outbox transaction and does not make ticket
-writes or search execution depend on a monitoring server.
-
-Metrics reporting does not depend on an external monitoring server. An
-unavailable Prometheus scraper does not participate in the ticket write or
-search paths and therefore does not affect their availability.
+Query strings and identifiers such as request IDs, ticket IDs, and user IDs are
+intentionally excluded from metric labels. Instrumentation sits outside the
+PostgreSQL ticket/outbox transaction and does not make ticket writes or search
+execution depend on a monitoring server.
 
 The application has Prometheus-compatible instrumentation. This repository
 does not deploy a Prometheus server, Alertmanager, or Grafana.
-
-## Health Model
 
 The API exposes two health endpoints with different meanings:
 
@@ -198,7 +229,7 @@ outage. The current search health implementation checks reachability, not
 ticket-index existence, and neither endpoint replaces broader deployment
 readiness checks.
 
-## Failure and Recovery Model
+## Failure and Consistency Models
 
 | Failure | Expected behavior | Recovery path |
 | --- | --- | --- |
@@ -214,13 +245,10 @@ readiness checks.
 | Metrics scraper or monitoring system is unavailable | Ticket writes and search continue because they do not call a monitoring server | Restore the external scraper or monitoring system |
 | `/metrics` cannot query PostgreSQL | The scrape request fails; ticket data remains authoritative in PostgreSQL | Diagnose the API/database dependency |
 
-## Consistency Model
-
 Ticket state and outbox intent are transactionally consistent inside
-PostgreSQL: the ticket row change and outbox event are committed in the same
-transaction.
-
-Search is eventually consistent: Elasticsearch can lag behind PostgreSQL until the worker processes ready outbox events, or until a full reindex rebuilds the projection.
+PostgreSQL. Search is eventually consistent: Elasticsearch can lag behind
+PostgreSQL until the worker processes ready outbox events, or until a full
+reindex rebuilds the projection.
 
 Authorization is still evaluated synchronously for every request, including
 search requests. Eventual consistency does not weaken the ownership boundary.
